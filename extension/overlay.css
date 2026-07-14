@@ -1,0 +1,482 @@
+/* ACO - Cart Optimizer - Overlay UI Styling */
+
+.aco-overlay-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 360px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: #1a1a1a;
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  z-index: 99999999;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1), transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,90,0,0.3) transparent;
+}
+
+.aco-overlay-container.aco-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Header */
+.aco-overlay-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aco-overlay-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  background-color: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.aco-overlay-header-text h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+  color: #ffffff;
+  letter-spacing: 0.3px;
+}
+
+.aco-overlay-header-text span {
+  font-size: 10px;
+  color: #ff5a00;
+  font-weight: 600;
+}
+
+/* Content Area */
+.aco-overlay-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aco-overlay-stage {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.aco-overlay-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 90, 0, 0.2);
+  border-top-color: #ff5a00;
+  border-radius: 50%;
+  animation: aco-spin 0.8s linear infinite;
+}
+
+/* Progress Bar */
+.aco-progress-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aco-progress-track {
+  height: 6px;
+  background-color: #2b2b2b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.aco-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #ff5a00, #00cc66);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.aco-progress-text {
+  font-size: 11px;
+  color: #888888;
+  display: flex;
+  justify-content: space-between;
+}
+
+/* Item Details */
+.aco-item-details {
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aco-item-label {
+  color: #888888;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+}
+
+.aco-item-value {
+  color: #ffffff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Warnings */
+.aco-warning-banner {
+  background-color: rgba(255, 90, 0, 0.1);
+  border-left: 3px solid #ff5a00;
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: #ffaa66;
+  line-height: 1.4;
+}
+
+/* Summary screen */
+.aco-summary-savings {
+  text-align: center;
+  padding: 10px 0;
+}
+
+.aco-savings-label {
+  font-size: 12px;
+  color: #888888;
+  font-weight: 500;
+}
+
+.aco-savings-value {
+  font-size: 32px;
+  font-weight: 800;
+  color: #00cc66;
+  margin-top: 4px;
+  text-shadow: 0 0 10px rgba(0, 204, 102, 0.2);
+}
+
+.aco-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 10px 0;
+}
+
+.aco-summary-table th {
+  text-align: left;
+  color: #888888;
+  font-weight: 500;
+  padding-bottom: 8px;
+}
+
+.aco-summary-table td {
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.aco-summary-table td:first-child {
+  color: #e0e0e0;
+}
+
+.aco-summary-table td:nth-child(2),
+.aco-summary-table td:nth-child(3) {
+  text-align: right;
+}
+
+.aco-summary-table td:nth-child(2) {
+  color: #ffaa66;
+}
+
+.aco-summary-table td:nth-child(3) {
+  color: #aaffaa;
+  font-weight: 600;
+}
+
+/* Stats box */
+.aco-stats-box {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aco-stats-title {
+  font-size: 11px;
+  color: #888888;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.aco-stats-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.aco-stats-row span:last-child {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* Open Source Footer */
+.aco-os-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.aco-os-text {
+  font-size: 11px;
+  color: #888888;
+  text-align: center;
+}
+
+.aco-os-buttons {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.aco-os-btn {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.2s;
+}
+
+.aco-os-coffee {
+  background-color: rgba(255, 90, 0, 0.1);
+  color: #ff5a00;
+  border: 1px solid rgba(255, 90, 0, 0.2);
+}
+
+.aco-os-coffee:hover {
+  background-color: rgba(255, 90, 0, 0.2);
+}
+
+.aco-os-github {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.aco-os-github:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.aco-close-btn {
+  width: 100%;
+  background-color: #ff5a00;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  box-shadow: 0 4px 10px rgba(255, 90, 0, 0.2);
+  margin-top: 8px;
+}
+
+.aco-close-btn:hover {
+  background-color: #ff7530;
+}
+
+.aco-os-sig {
+  font-size: 9px;
+  color: #666666;
+  margin-top: 4px;
+}
+
+.aco-os-sig span {
+  color: #888888;
+}
+
+@keyframes aco-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Logs Panel */
+.aco-logs-toggle-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #ffaa66;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+  transition: all 0.2s ease;
+  margin-top: 4px;
+}
+
+.aco-logs-toggle-btn:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.aco-logs-panel-collapsed {
+  display: none;
+  height: 0;
+  overflow: hidden;
+}
+
+.aco-logs-panel-expanded {
+  display: flex;
+  flex-direction: column;
+  height: 150px;
+  background-color: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.aco-logs-content {
+  flex: 1;
+  overflow-y: auto;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #c0c0c0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aco-log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.aco-log-info {
+  color: #a0a0a0;
+}
+
+.aco-log-success {
+  color: #00cc66;
+}
+
+.aco-log-warn {
+  color: #ffcc00;
+}
+
+.aco-log-error {
+  color: #ff4444;
+  font-weight: bold;
+}
+
+/* =============================================================
+   ALLEGRO SHARE – Sekcja akceptacji koszyka
+   ============================================================= */
+
+.aco-share-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.aco-share-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  text-align: center;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+/* Komunikat o cashbacku */
+.aco-cashback-notice {
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aco-cashback-detected {
+  background-color: rgba(255, 60, 0, 0.12);
+  border-left: 3px solid #ff3c00;
+  color: #ffaa88;
+}
+
+.aco-cashback-info {
+  background-color: rgba(0, 150, 255, 0.08);
+  border-left: 3px solid #0096ff;
+  color: #88c8ff;
+}
+
+/* Dwa przyciski obok siebie */
+.aco-share-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.aco-share-buttons .aco-close-btn {
+  flex: 1;
+  margin-top: 0;
+}
+
+/* Przycisk: Z poleceniem (pomarańczowy – domyślny akcent) */
+.aco-btn-share-yes {
+  background: linear-gradient(135deg, #ff5a00, #ff8c00) !important;
+  box-shadow: 0 4px 12px rgba(255, 90, 0, 0.35) !important;
+  font-size: 12px !important;
+}
+
+.aco-btn-share-yes:hover {
+  background: linear-gradient(135deg, #ff7530, #ffa020) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(255, 90, 0, 0.5) !important;
+}
+
+/* Przycisk: Bez polecenia (neutralny / szary-zielony) */
+.aco-btn-share-no {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #b0e0b0 !important;
+  border: 1px solid rgba(0, 204, 102, 0.25) !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+}
+
+.aco-btn-share-no:hover {
+  background: rgba(0, 204, 102, 0.12) !important;
+  border-color: rgba(0, 204, 102, 0.4) !important;
+  transform: translateY(-1px);
+}

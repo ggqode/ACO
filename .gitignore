@@ -1,0 +1,29 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Node.js dependencies
+node_modules/
+
+# Zip archives (extension package)
+*.zip
+
+# Local debug files and chrome profile
+bot_chrome_profile/
+dane_koszyka.json
+zoptymalizowany_koszyk.json
+debug_json_*.json
+debug_page_*.html
+debug_cart.html
+differences.txt
+
+# Production config with affiliate parameters (NEVER commit this!)
+extension/config.production.js
+
+# Editor / IDE settings
+.idea/
+.vscode/
+.agents/
+.gemini/
+.git/

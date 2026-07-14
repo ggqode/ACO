@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "highs": "^1.14.2",
+    "javascript-lp-solver": "^1.0.3",
+    "yalps": "^0.6.4"
+  }
+}
