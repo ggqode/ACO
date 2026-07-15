@@ -480,3 +480,13 @@
   border-color: rgba(0, 204, 102, 0.4) !important;
   transform: translateY(-1px);
 }
+
+/* =============================================================
+   CAPTCHA MODAL IFRAME WRAPPER
+   ============================================================= */
+#aco-captcha-iframe-wrapper.aco-captcha-visible {
+  border: 2px solid #ff5a00;
+}
+.aco-captcha-header {
+  border-bottom: 1px solid #ddd;
+}

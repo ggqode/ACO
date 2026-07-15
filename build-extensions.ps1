@@ -9,14 +9,25 @@ Compress-Archive -Path "extension/*" -DestinationPath "ACO-chromium.zip" -Force
 
 # 2. Package Firefox extension
 Write-Host "Packaging for Firefox..." -ForegroundColor Green
-if (Test-Path "ACO-firefox.zip") { Remove-Item "ACO-firefox.zip" }
 # Backup Chromium manifest
 Copy-Item -Path "extension/manifest.json" -Destination "extension/manifest.json.bak" -Force
 try {
     # Copy Firefox manifest
     Copy-Item -Path "extension/manifest.firefox.json" -Destination "extension/manifest.json" -Force
+    
+    # Try to remove old archive, handling file locks gracefully
+    if (Test-Path "ACO-firefox.zip") {
+        try {
+            Remove-Item "ACO-firefox.zip" -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "Plik ACO-firefox.zip jest zablokowany przez inny proces. Pomijam usuwanie i sprobuje nadpisac."
+        }
+    }
+    
     # Package Firefox files
     Compress-Archive -Path "extension/*" -DestinationPath "ACO-firefox.zip" -Force
+} catch {
+    Write-Error "Blad podczas budowania Firefox zip: $_"
 } finally {
     # Restore Chromium manifest
     Copy-Item -Path "extension/manifest.json.bak" -Destination "extension/manifest.json" -Force

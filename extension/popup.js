@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Load safe mode setting
   chrome.storage.local.get(["aco_safe_mode"], (res) => {
-    const safeMode = res.aco_safe_mode !== false; // default to true
+    const safeMode = res.aco_safe_mode === true; // default to false
     safeModeToggle.checked = safeMode;
   });
 

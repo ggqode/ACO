@@ -59,6 +59,60 @@ console.error = function (...args) {
   pushAcoLog("[ERROR]", args);
 };
 
+// Safely wrap chrome API to handle "Extension context invalidated" gracefully
+if (typeof chrome !== 'undefined') {
+  const handleInvalidatedContext = () => {
+    originalWarn.call(console, "[ACO] Extension context invalidated. Reloading page to update content script...");
+    window.location.reload();
+  };
+
+  const wrapCallback = (cb) => {
+    if (!cb) return cb;
+    return (...args) => {
+      try {
+        cb(...args);
+      } catch (err) {
+        if (err && err.message && err.message.includes("Extension context invalidated")) {
+          handleInvalidatedContext();
+        } else {
+          throw err;
+        }
+      }
+    };
+  };
+
+  const wrapMethod = (target, prop) => {
+    if (!target || typeof target[prop] !== 'function') return;
+    const orig = target[prop];
+    target[prop] = function (...args) {
+      try {
+        for (let i = 0; i < args.length; i++) {
+          if (typeof args[i] === 'function') {
+            args[i] = wrapCallback(args[i]);
+          }
+        }
+        return orig.apply(this, args);
+      } catch (err) {
+        if (err && err.message && err.message.includes("Extension context invalidated")) {
+          handleInvalidatedContext();
+        } else {
+          throw err;
+        }
+      }
+    };
+  };
+
+  if (chrome.storage && chrome.storage.local) {
+    wrapMethod(chrome.storage.local, 'get');
+    wrapMethod(chrome.storage.local, 'set');
+    wrapMethod(chrome.storage.local, 'remove');
+    wrapMethod(chrome.storage.local, 'clear');
+  }
+  if (chrome.runtime) {
+    wrapMethod(chrome.runtime, 'sendMessage');
+  }
+}
+
 // Helper to add base delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -206,7 +260,7 @@ function simulateHumanScroll() {
 // Wrapper for scrolling based on Safe Mode setting
 function runScroll() {
   chrome.storage.local.get(["aco_safe_mode"], (res) => {
-    const isSafeMode = res.aco_safe_mode !== false;
+    const isSafeMode = res.aco_safe_mode === true;
     if (isSafeMode) {
       simulateHumanScroll();
     }
@@ -217,7 +271,7 @@ function runScroll() {
 function runDelay(safeMs, fastMs = 200) {
   return new Promise((resolve) => {
     chrome.storage.local.get(["aco_safe_mode"], async (res) => {
-      const isSafeMode = res.aco_safe_mode !== false;
+      const isSafeMode = res.aco_safe_mode === true;
       if (isSafeMode) {
         const randomMs = safeMs + Math.random() * 800;
         await delay(randomMs);
@@ -228,6 +282,7 @@ function runDelay(safeMs, fastMs = 200) {
     });
   });
 }
+
 
 // Wait for a selector to appear in the DOM
 function waitForSelector(selector, timeoutMs = 10000) {
@@ -250,7 +305,126 @@ function waitForSelector(selector, timeoutMs = 10000) {
 }
 
 // -------------------------------------------------------------
+// IFRAME NAVIGATOR (For silent background operations)
+// -------------------------------------------------------------
+class IframeNavigator {
+  constructor() {
+    this.iframe = null;
+    this.wrapper = null;
+    this.isCaptchaMode = false;
+  }
+
+  createHiddenIframe(url) {
+    this.destroy(); 
+    
+    this.wrapper = document.createElement("div");
+    this.wrapper.id = "aco-captcha-iframe-wrapper";
+    this.wrapper.style.position = "fixed";
+    this.wrapper.style.width = "1280px";
+    this.wrapper.style.height = "1024px";
+    this.wrapper.style.left = "0px";
+    this.wrapper.style.top = "0px";
+    this.wrapper.style.opacity = "0.001";
+    this.wrapper.style.pointerEvents = "none";
+    this.wrapper.style.overflow = "hidden";
+    this.wrapper.style.zIndex = "-9999";
+
+    this.iframe = document.createElement("iframe");
+    this.iframe.src = url;
+    this.iframe.style.width = "100%";
+    this.iframe.style.height = "100%";
+    this.iframe.style.border = "none";
+    
+    this.wrapper.appendChild(this.iframe);
+    document.body.appendChild(this.wrapper);
+    
+    return this.iframe;
+  }
+
+  revealAsCaptchaModal() {
+    this.isCaptchaMode = true;
+    if (this.wrapper) {
+      this.wrapper.className = "aco-captcha-visible";
+      this.wrapper.style.position = "fixed";
+      this.wrapper.style.width = "400px";
+      this.wrapper.style.height = "550px";
+      this.wrapper.style.top = "50%";
+      this.wrapper.style.left = "50%";
+      this.wrapper.style.transform = "translate(-50%, -50%)";
+      this.wrapper.style.zIndex = "9999999";
+      this.wrapper.style.visibility = "visible";
+      this.wrapper.style.display = "block";
+      this.wrapper.style.backgroundColor = "#fff";
+      this.wrapper.style.boxShadow = "0 10px 40px rgba(0,0,0,0.6)";
+      this.wrapper.style.borderRadius = "8px";
+      this.wrapper.style.overflow = "hidden";
+      this.wrapper.style.opacity = "1";
+      this.wrapper.style.pointerEvents = "auto";
+      
+      if (!document.getElementById("aco-captcha-header")) {
+        const header = document.createElement("div");
+        header.id = "aco-captcha-header";
+        header.className = "aco-captcha-header";
+        header.innerHTML = `
+          <div style="background: #ff5a00; color: white; padding: 12px; font-weight: bold; text-align: center; font-family: sans-serif; font-size: 14px;">
+            Potwierdź, że jesteś człowiekiem, aby ACO mogło kontynuować
+          </div>
+        `;
+        this.wrapper.insertBefore(header, this.iframe);
+        this.iframe.style.height = "calc(100% - 44px)";
+      }
+    }
+  }
+
+  hideAgain() {
+    this.isCaptchaMode = false;
+    if (this.wrapper) {
+      this.wrapper.className = "";
+      this.wrapper.style.position = "fixed";
+      this.wrapper.style.width = "1280px";
+      this.wrapper.style.height = "1024px";
+      this.wrapper.style.left = "0px";
+      this.wrapper.style.top = "0px";
+      this.wrapper.style.opacity = "0.001";
+      this.wrapper.style.pointerEvents = "none";
+      this.wrapper.style.overflow = "hidden";
+      this.wrapper.style.zIndex = "-9999";
+      
+      const header = document.getElementById("aco-captcha-header");
+      if (header) header.remove();
+      this.iframe.style.height = "100%";
+    }
+  }
+
+  destroy() {
+    if (this.wrapper) {
+      this.wrapper.remove();
+      this.wrapper = null;
+      this.iframe = null;
+    }
+  }
+
+  waitForLoad(timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      if (!this.iframe) return reject(new Error("Iframe not created"));
+      
+      const timer = setTimeout(() => {
+        reject(new Error("Iframe load timeout"));
+      }, timeoutMs);
+      
+      this.iframe.onload = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+  }
+}
+
+const iframeNav = new IframeNavigator();
+
+// -------------------------------------------------------------
 // OVERLAY MANAGER (Renders progress and summary widgets)
+
 // -------------------------------------------------------------
 class ACOOverlay {
   constructor() {
@@ -370,7 +544,7 @@ class ACOOverlay {
         </div>
         ${itemHtml}
         <div class="aco-warning-banner">
-          ⚠️ <strong>Nie zamykaj tej karty.</strong> ACO będzie automatycznie przechodzić pomiędzy stronami Allegro i po zakończeniu wróci do koszyka.
+          ⚠️ <strong>Nie zamykaj i nie przełączaj tej karty.</strong> Praca w tle spowalnia proces przez oszczędzanie energii przeglądarki.
         </div>
         <!-- Logs Panel Toggle Button -->
         <button id="aco-toggle-logs" class="aco-logs-toggle-btn">Pokaż Dziennik Zdarzeń (Logi) ▼</button>
@@ -680,38 +854,6 @@ async function runStateAction(data) {
     await runDelay(2000, 200); // Allow DOM content to settle
     await runScrapeCart();
   }
-  else if (state === "scraping_alternatives") {
-    const idx = data.aco_current_item_index || 0;
-    const items = data.aco_cart_items || [];
-
-    if (idx < items.length) {
-      const item = items[idx];
-      const progress = Math.round((idx / items.length) * 100);
-      overlay.showWorking(
-        `Analiza ofert (${idx + 1}/${items.length})`,
-        progress,
-        `Przedmiot ${idx + 1} z ${items.length}`,
-        item.title || item.offer_id
-      );
-
-      // Confirm we are on the alternatives page of this offer
-      const currentUrl = window.location.href;
-      if (currentUrl.includes(item.offer_id)) {
-        runScroll();
-        await runDelay(1200, 200); // human sleep
-        await runScrapeAlternatives(item, idx, items.length);
-      } else {
-        // If we reloaded and got misdirected, navigate to the correct alternatives URL
-        console.warn("[ACO] Displaced from alternatives page. Navigating back...");
-        window.location.href = `https://allegro.pl/oferta/${item.offer_id}?order=p&buyNew=1&offerTypeBuyNow=1&p=1#inne-oferty-produktu`;
-      }
-    } else {
-      // All alternatives scraped, proceed to solve
-      chrome.storage.local.set({ aco_state: "optimizing" }, () => {
-        handleStateAction();
-      });
-    }
-  }
   else if (state === "optimizing") {
     overlay.showWorking("Optymalizacja", 90, "Uruchamianie algorytmu...", "Branch-and-Bound");
     await runDelay(1000, 100);
@@ -722,7 +864,37 @@ async function runStateAction(data) {
     await runDelay(1500, 100);
     await runClearCart();
   }
+  else if (state === "scraping_alternatives") {
+    // Handled reactively by scrapeAlternativesViaIframe() postMessage system
+    // If we land here on boot, resume from current index
+    chrome.storage.local.get(["aco_cart_items", "aco_current_item_index"], async (res) => {
+      const cart = res.aco_cart_items || [];
+      const idx = res.aco_current_item_index || 0;
+      if (idx < cart.length) {
+        const progress = Math.round((idx / cart.length) * 100);
+        overlay.showWorking(
+          `Analiza ofert (${idx + 1}/${cart.length})`,
+          progress,
+          `Przedmiot ${idx + 1} z ${cart.length}`,
+          cart[idx].title || cart[idx].offer_id
+        );
+        await runDelay(500, 100);
+        scrapeAlternativesViaIframe(cart[idx], idx, cart.length);
+      } else {
+        chrome.storage.local.set({ aco_state: "optimizing" }, () => handleStateAction());
+      }
+    });
+    return;
+  }
   else if (state === "recreating_cart") {
+    const optList = data.aco_optimized_list || [];
+    const useShare = data.aco_use_share === true;
+    
+    overlay.showWorking("Aktualizacja koszyka", 0, "Przygotowywanie...", "Uruchamianie cichej odbudowy");
+    await runSilentCartRebuild(optList, useShare);
+  }
+  else if (state === "recreating_cart_fallback") {
+    // FALLBACK: Odbudowa koszyka klasyczną metodą redirectów
     const idx = data.aco_current_recreate_index || 0;
     const optList = data.aco_optimized_list || [];
     const useShare = data.aco_use_share === true;
@@ -731,7 +903,7 @@ async function runStateAction(data) {
       const item = optList[idx];
       const progress = Math.round((idx / optList.length) * 100);
       overlay.showWorking(
-        `Aktualizacja koszyka (${idx + 1}/${optList.length})`,
+        `Aktualizacja koszyka (${idx + 1}/${optList.length}) [TRYB KLASYCZNY]`,
         progress,
         `Dodawanie ${idx + 1} z ${optList.length}`,
         `Oferta ID: ${item.offer_id} (${item.quantity} szt.)`
@@ -741,14 +913,16 @@ async function runStateAction(data) {
       if (currentUrl.includes(item.offer_id)) {
         runScroll();
         await runDelay(1200, 200);
-        await runAddToCart(item, idx, optList.length, useShare);
+        await runAddToCartFallback(item, idx, optList.length, useShare);
       } else {
         console.warn("[ACO] Displaced from offer page. Navigating back...");
         window.location.href = buildOfferUrl(item.offer_id, useShare);
       }
     } else {
-      // Complete! Go back to cart page
-      chrome.storage.local.set({ aco_state: "completed" }, () => {
+      chrome.storage.local.set({
+        aco_state: "recreating_cart",
+        aco_current_recreate_index: optList.length
+      }, () => {
         window.location.href = "https://allegro.pl/koszyk";
       });
     }
@@ -795,10 +969,10 @@ async function runStateAction(data) {
 async function runScrapeCart() {
   console.log("[ACO] Scraping cart elements...");
   try {
-    // Wait for at least one offer link to ensure cart page is loaded
-    await waitForSelector("a[href*='/oferta/']", 15000);
+    // Wait for at least one remove button to ensure cart page items are loaded
+    await waitForSelector("button[data-cy='offer-row.remove'], button[aria-label^='Usuń przedmiot'], button[aria-label*='Usuń z koszyka']", 15000);
   } catch (err) {
-    console.error("[ACO] No offers found in DOM:", err.message);
+    console.error("[ACO] No remove buttons found in DOM:", err.message);
     overlay.showError("Nie znaleziono przedmiotów w koszyku. Dodaj produkty przed optymalizacją.");
     return;
   }
@@ -808,9 +982,24 @@ async function runScrapeCart() {
 
   // Scrape cart offers
   const cartOffers = {};
-  const links = document.querySelectorAll("a[href*='/oferta/']");
+  const removeButtons = document.querySelectorAll("button[data-cy='offer-row.remove'], button[aria-label^='Usuń przedmiot'], button[aria-label*='Usuń z koszyka']");
 
-  links.forEach(link => {
+  removeButtons.forEach(btn => {
+    // Find the row container by ascending
+    let row = btn.closest("section") || btn.closest("div[data-box-name='cart-item']") || btn.closest("li") || btn.parentElement;
+    while (row && row.tagName !== "BODY") {
+      if (row.querySelector("a[href*='/oferta/']")) {
+        break;
+      }
+      row = row.parentElement;
+    }
+
+    if (!row || row === document.body) return;
+
+    // Find the offer link inside this container
+    const link = row.querySelector("a[href*='/oferta/']");
+    if (!link) return;
+
     const href = link.getAttribute("href") || "";
     const match = href.match(/\/oferta\/.*?-?(\d{8,14})/);
     if (!match) return;
@@ -823,15 +1012,6 @@ async function runScrapeCart() {
       let isSmart = false;
       let seller = "Nieznany";
       let shippingCost = 0.0;
-
-      // Ascend DOM to locate row container
-      let row = link.closest("section") || link.closest("div[data-box-name='cart-item']") || link.closest("li") || link.parentElement;
-      while (row && row.tagName !== "BODY") {
-        if (row.querySelector("input[type='number']") || row.querySelector("button[data-cy='offer-row.remove']")) {
-          break;
-        }
-        row = row.parentElement;
-      }
 
       if (row && row !== document.body) {
         // Quantity - szukamy inputa z aria-label='Quantity input field', przesuwajac sie w gore DOM
@@ -954,19 +1134,191 @@ async function runScrapeCart() {
     return;
   }
 
-  // Save items and transition state
+  // Zapisz początkowe koszyki
   chrome.storage.local.set({
     aco_cart_items: cartList,
     aco_initial_totals: initialTotals,
+    aco_all_offers: []
+  });
+
+  // Przełącz na scraping alternatyw przez ukryty iframe
+  const first = cartList[0];
+  chrome.storage.local.set({
     aco_all_offers: [],
     aco_current_item_index: 0,
     aco_state: "scraping_alternatives"
   }, async () => {
-    // Wait a random delay before navigating to prevent instant request bursts
-    await runDelay(1200, 200);
-    const first = cartList[0];
-    window.location.href = `https://allegro.pl/oferta/${first.offer_id}?order=p&buyNew=1&offerTypeBuyNow=1&p=1#inne-oferty-produktu`;
+    await runDelay(800, 100);
+    scrapeAlternativesViaIframe(first, 0, cartList.length);
   });
+}
+
+// Scrape alternatives for one item using a hidden iframe
+function scrapeAlternativesViaIframe(item, index, totalItems) {
+  const url = `https://allegro.pl/oferta/${item.offer_id}?order=p&buyNew=1&offerTypeBuyNow=1&p=1#inne-oferty-produktu`;
+  console.log(`[ACO] Scraping alternatives for ${item.offer_id} via hidden iframe...`);
+
+  const iframe = iframeNav.createHiddenIframe(url);
+  let resolved = false;
+  let timeoutTimer = null;
+
+  const onMessage = (e) => {
+    if (!e.data || typeof e.data !== "object") return;
+
+    if (e.data.type === "ACO_CAPTCHA_DETECTED") {
+      iframeNav.revealAsCaptchaModal();
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+        console.warn("[ACO] CAPTCHA detected. Scrape timeout paused.");
+      }
+    } else if (e.data.type === "ACO_CAPTCHA_SOLVED") {
+      iframeNav.hideAgain();
+    } else if (e.data.type === "ACO_ALTERNATIVES_SCRAPED") {
+      if (resolved) return;
+      resolved = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      window.removeEventListener("message", onMessage);
+      iframeNav.destroy();
+
+      const offersList = e.data.offers || [];
+      console.log(`[ACO] Received ${offersList.length} alternatives for ${item.offer_id}`);
+
+      chrome.storage.local.get(["aco_all_offers", "aco_cart_items"], (res) => {
+        const all = res.aco_all_offers || [];
+        const updated = all.concat(offersList);
+        const nextIdx = index + 1;
+        const cart = res.aco_cart_items || [];
+
+        const progress = Math.round((nextIdx / totalItems) * 100);
+        overlay.showWorking(
+          `Analiza ofert (${nextIdx}/${totalItems})`,
+          progress,
+          `Przeanalizowano ${nextIdx} z ${totalItems}`,
+          cart[nextIdx] ? (cart[nextIdx].title || cart[nextIdx].offer_id) : "Zakończono"
+        );
+
+        chrome.storage.local.set({
+          aco_all_offers: updated,
+          aco_current_item_index: nextIdx
+        }, async () => {
+          if (nextIdx < cart.length) {
+            await runDelay(1000, 200);
+            scrapeAlternativesViaIframe(cart[nextIdx], nextIdx, totalItems);
+          } else {
+            chrome.storage.local.set({ aco_state: "optimizing" }, () => {
+              handleStateAction();
+            });
+          }
+        });
+      });
+    } else if (e.data.type === "ACO_SCRAPE_FAILED") {
+      if (resolved) return;
+      resolved = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      window.removeEventListener("message", onMessage);
+      iframeNav.destroy();
+
+      console.error(`[ACO] Iframe scrape failed for ${item.offer_id}, using fallback`);
+      const fallback = [{
+        product_id_group: item.offer_id,
+        base_offer_id: item.offer_id,
+        offer_id: item.offer_id,
+        seller: item.seller || "Nieznany",
+        price: item.price || 9999.0,
+        is_smart: item.is_smart || false,
+        shipping_cost: item.shipping_cost || DEFAULT_SHIPPING_COST,
+        stock: 999,
+        required_quantity: item.quantity
+      }];
+
+      chrome.storage.local.get(["aco_all_offers", "aco_cart_items"], (res) => {
+        const all = res.aco_all_offers || [];
+        const updated = all.concat(fallback);
+        const nextIdx = index + 1;
+        const cart = res.aco_cart_items || [];
+
+        chrome.storage.local.set({
+          aco_all_offers: updated,
+          aco_current_item_index: nextIdx
+        }, async () => {
+          if (nextIdx < cart.length) {
+            await runDelay(800, 200);
+            scrapeAlternativesViaIframe(cart[nextIdx], nextIdx, totalItems);
+          } else {
+            chrome.storage.local.set({ aco_state: "optimizing" }, () => {
+              handleStateAction();
+            });
+          }
+        });
+      });
+    }
+  };
+
+  window.addEventListener("message", onMessage);
+
+  // Timeout if iframe never responds (only active if no captcha detected)
+  timeoutTimer = setTimeout(() => {
+    if (!resolved) {
+      // Check if the tab was hidden during this timeout
+      if (document.hidden) {
+        console.warn(`[ACO] Wykryto nieaktywną kartę podczas timeoutu dla ${item.offer_id}. Wstrzymujemy proces i czekamy na powrót.`);
+        window.removeEventListener("message", onMessage);
+        iframeNav.destroy();
+        
+        // Show paused status on the overlay
+        overlay.showWorking(
+          `Analiza wstrzymana (karta w tle)`,
+          Math.round((index / totalItems) * 100),
+          `Wstrzymano przy produkcie ${index + 1} z ${totalItems}`,
+          `Przełącz się z powrotem na tę kartę, aby wznowić pobieranie dla: ${item.title || item.offer_id}`
+        );
+        
+        // Setup listener to resume when tab is active again
+        const onVisible = () => {
+          if (!document.hidden) {
+            document.removeEventListener("visibilitychange", onVisible);
+            console.log(`[ACO] Użytkownik powrócił na kartę. Wznawiamy pobieranie dla ${item.offer_id}...`);
+            scrapeAlternativesViaIframe(item, index, totalItems);
+          }
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return;
+      }
+
+      resolved = true;
+      window.removeEventListener("message", onMessage);
+      iframeNav.destroy();
+      console.warn(`[ACO] Iframe scrape timeout for ${item.offer_id}`);
+      // treat as failed
+      const fallback = [{
+        product_id_group: item.offer_id,
+        base_offer_id: item.offer_id,
+        offer_id: item.offer_id,
+        seller: item.seller || "Nieznany",
+        price: item.price || 9999.0,
+        is_smart: item.is_smart || false,
+        shipping_cost: item.shipping_cost || DEFAULT_SHIPPING_COST,
+        stock: 999,
+        required_quantity: item.quantity
+      }];
+
+      chrome.storage.local.get(["aco_all_offers", "aco_cart_items"], (res) => {
+        const all = res.aco_all_offers || [];
+        const updated = all.concat(fallback);
+        const nextIdx = index + 1;
+        const cart = res.aco_cart_items || [];
+        chrome.storage.local.set({ aco_all_offers: updated, aco_current_item_index: nextIdx }, async () => {
+          if (nextIdx < cart.length) {
+            await runDelay(800, 200);
+            scrapeAlternativesViaIframe(cart[nextIdx], nextIdx, totalItems);
+          } else {
+            chrome.storage.local.set({ aco_state: "optimizing" }, () => handleStateAction());
+          }
+        });
+      });
+    }
+  }, 25000);
 }
 
 function extractInitialTotals() {
@@ -998,223 +1350,6 @@ function extractInitialTotals() {
 
   console.log("[ACO] Scraped initial totals:", totals);
   return totals;
-}
-
-// -------------------------------------------------------------
-// STEP 2: SCRAPE ALTERNATIVE OFFERS PER PRODUCT
-// -------------------------------------------------------------
-async function runScrapeAlternatives(item, index, totalItems) {
-  console.log(`[ACO] Scraping alternatives for ${item.offer_id}...`);
-
-  // Wait up to 30s for the actual alternative offer links to load and render
-  let loaded = false;
-  for (let t = 0; t < 60; t++) {
-    const offerLink = document.querySelector(".opbox-listing a, li[data-role='offer-card'] a");
-    if (offerLink) {
-      loaded = true;
-      break;
-    }
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  if (!loaded) {
-    console.warn("[ACO] Alternatives listing links load timed out (30s). Trying page reload...");
-    window.location.reload();
-    // Czekamy kolejne 30 sekund po reloadzie
-    for (let t = 0; t < 60 && !loaded; t++) {
-      const offerLink = document.querySelector(".opbox-listing a, li[data-role='offer-card'] a");
-      if (offerLink) {
-        loaded = true;
-        break;
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    if (!loaded) {
-      console.warn("[ACO] Alternatives listing still not loaded after reload. Proceeding with fallback.");
-    }
-    await new Promise(r => setTimeout(r, 500));
-  } else {
-    // Brief settle delay to allow React state scripts to hydrate completely
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  // Determine the canonical product group id if available
-  let productIdGroup = item.offer_id;
-  const canonical = document.querySelector("link[rel='canonical']");
-  if (canonical && canonical.href) {
-    const match = canonical.href.match(/-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
-    if (match) {
-      productIdGroup = match[1];
-    }
-  }
-
-  let container = document.querySelector(".opbox-listing, #inne-oferty-produktu, [data-box-name='listing']");
-  if (!container) {
-    container = document.querySelector("div[class*='listing']");
-  }
-
-  let offersList = [];
-
-  // Method 1: Extract from serialized JS scripts (Query globally to ensure we find Next.js/React state blocks)
-  const scripts = document.querySelectorAll("script[data-serialize-box-id]");
-  scripts.forEach(s => {
-    try {
-      const data = JSON.parse(s.textContent);
-      if (data && data.__listing_StoreState) {
-        const elements = data.__listing_StoreState.items?.elements || [];
-        elements.forEach(el => {
-          const offerIdVal = el.id;
-          if (!offerIdVal || !/^\d+$/.test(String(offerIdVal))) return;
-
-          const sellerName = normalizeSeller(el.seller?.login || "Nieznany");
-
-          let priceVal = 9999.0;
-          if (el.price?.mainPrice?.amount) {
-            priceVal = parseFloat(el.price.mainPrice.amount);
-          }
-
-          let smart = false;
-          const labels = el.freebox?.labels || [];
-          labels.forEach(lbl => {
-            const parts = lbl.labelParts || [];
-            parts.forEach(p => {
-              if (p.text && (p.text.includes("Smart!") || p.text.toLowerCase().includes("smart"))) {
-                smart = true;
-              }
-            });
-          });
-
-          if (!smart) {
-            // Dodatkowe sprawdzenie w serializowanym JSON
-            const str = JSON.stringify(el);
-            if (str.includes('"Smart!"') || str.includes('"smart!"') || str.includes('is_smart":true')) {
-              smart = true;
-            }
-          }
-
-          let shippingCost = DEFAULT_SHIPPING_COST;
-          if (el.shipping?.lowest?.amount) {
-            shippingCost = parseFloat(el.shipping.lowest.amount);
-          }
-
-          const stock = el.quantity || 999;
-
-          offersList.push({
-            product_id_group: productIdGroup,
-            base_offer_id: item.offer_id,
-            offer_id: String(offerIdVal),
-            seller: sellerName,
-            price: priceVal,
-            is_smart: smart,
-            shipping_cost: shippingCost,
-            stock: stock,
-            required_quantity: item.quantity
-          });
-        });
-      }
-    } catch (e) {
-      // ignore JSON parse errors
-    }
-  });
-
-  // Method 2: Fallback to scraping the DOM HTML
-  if (offersList.length === 0) {
-    console.log("[ACO] Script parse returned 0 offers. Checking DOM HTML...");
-    const liItems = container
-      ? container.querySelectorAll("li, li[data-role='offer-card']")
-      : document.querySelectorAll(".opbox-listing li, li[data-role='offer-card']");
-    liItems.forEach(li => {
-      try {
-        const aTag = li.querySelector("a[href*='/oferta/']");
-        if (!aTag) return;
-        const href = aTag.getAttribute("href") || "";
-        const match = href.match(/\/oferta\/.*?-?(\d{8,14})/);
-        if (!match) return;
-        const offerIdVal = match[1];
-
-        const sellerTag = li.querySelector("a[href*='/uzytkownik/'], a[href*='/sklep/']");
-        const sellerName = sellerTag ? normalizeSeller(sellerTag.getAttribute("href") || sellerTag.innerText) : "nieznany";
-
-        let priceVal = 9999.0;
-        const text = li.innerText || "";
-        const priceMatch = text.match(/([\d\s]+[.,]\d{2})\s*zł/);
-        if (priceMatch) {
-          priceVal = parseFloat(priceMatch[1].replace(/\s/g, "").replace(",", ".")) || 9999.0;
-        }
-
-        const isSmart = !!li.querySelector("button[aria-label*='Smart!'], [aria-label*='Smart'], img[src*='smart']") || text.toLowerCase().includes("smart");
-
-        let shippingCost = DEFAULT_SHIPPING_COST;
-        const shipMatch = text.match(/dostawa\s+od\s+([\d\s]+[.,]\d{2})\s*zł/i) || text.match(/dostawa\s+([\d\s]+[.,]\d{2})\s*zł/i);
-        if (shipMatch) {
-          shippingCost = parseFloat(shipMatch[1].replace(/\s/g, "").replace(",", ".")) || DEFAULT_SHIPPING_COST;
-        }
-
-        // Available stock estimation
-        let stock = 999;
-        const textLower = text.toLowerCase();
-        if (textLower.includes("ostatnia sztuka")) stock = 1;
-        else if (textLower.includes("ostatnie 2 sztuki")) stock = 2;
-
-        offersList.push({
-          product_id_group: productIdGroup,
-          base_offer_id: item.offer_id,
-          offer_id: offerIdVal,
-          seller: sellerName,
-          price: priceVal,
-          is_smart: isSmart,
-          shipping_cost: shippingCost,
-          stock: stock,
-          required_quantity: item.quantity
-        });
-      } catch (err) {
-        // ignore
-      }
-    });
-  }
-
-  // Method 3: Always include the original cart offer as a candidate so the solver can always fallback to it!
-  const originalAlreadyIncluded = offersList.some(o => o.offer_id === item.offer_id);
-  if (!originalAlreadyIncluded) {
-    console.log("[ACO] Prepending original cart item to candidates pool.");
-    offersList.push({
-      product_id_group: productIdGroup,
-      base_offer_id: item.offer_id,
-      offer_id: item.offer_id,
-      seller: item.seller || "Nieznany",
-      price: item.price || 9999.0,
-      is_smart: item.is_smart || false,
-      shipping_cost: item.shipping_cost || DEFAULT_SHIPPING_COST,
-      stock: 999,
-      required_quantity: item.quantity
-    });
-  }
-
-  console.log(`[ACO] Found ${offersList.length} offers for item index ${index}`);
-
-  // Fetch all compiled offers from storage, append, and save
-  chrome.storage.local.get(["aco_all_offers", "aco_cart_items"], (res) => {
-    const all = res.aco_all_offers || [];
-    const updated = all.concat(offersList);
-    const nextIdx = index + 1;
-    const cart = res.aco_cart_items || [];
-
-    chrome.storage.local.set({
-      aco_all_offers: updated,
-      aco_current_item_index: nextIdx
-    }, async () => {
-      if (nextIdx < cart.length) {
-        // Wait a random delay to avoid bot detection rate limits
-        await runDelay(1500, 200);
-        const nextItem = cart[nextIdx];
-        window.location.href = `https://allegro.pl/oferta/${nextItem.offer_id}?order=p&buyNew=1&offerTypeBuyNow=1&p=1#inne-oferty-produktu`;
-      } else {
-        chrome.storage.local.set({ aco_state: "optimizing" }, () => {
-          handleStateAction();
-        });
-      }
-    });
-  });
 }
 
 // -------------------------------------------------------------
@@ -1349,7 +1484,7 @@ async function runClearCart() {
 
     // Wait and call runClearCart again to handle AJAX updates or page reloads
     chrome.storage.local.get(["aco_safe_mode"], (res) => {
-      const isSafe = res.aco_safe_mode !== false;
+      const isSafe = res.aco_safe_mode === true;
       const ms = isSafe ? (3000 + Math.random() * 1000) : 300;
       setTimeout(runClearCart, ms);
     });
@@ -1372,7 +1507,7 @@ function checkCartIsEmptyAndProceed() {
           aco_current_recreate_index: 0,
           aco_state: "recreating_cart"
         }, () => {
-          window.location.href = buildOfferUrl(optList[0].offer_id, useShare);
+          handleStateAction();
         });
       } else {
         overlay.showError("Brak pozycji zoptymalizowanych do dodania.");
@@ -1385,23 +1520,119 @@ function checkCartIsEmptyAndProceed() {
 }
 
 // -------------------------------------------------------------
-// STEP 5: ADD OPTIMIZED ITEMS TO CART
+// STEP 5: ADD OPTIMIZED ITEMS TO CART (SILENT IFRAME)
 // -------------------------------------------------------------
-async function runAddToCart(item, index, totalItems, useShare = false) {
-  console.log(`[ACO] Recreating: Adding offer ${item.offer_id} (qty ${item.quantity})...`);
 
-  // Bypass cookie consent if needed
-  try {
-    const consent = document.querySelector("button[data-role='accept-consent']");
-    if (consent) {
-      consent.click();
-      await runDelay(800, 100);
+async function runSilentCartRebuild(optList, useShare) {
+  const rebuildData = await new Promise(resolve => chrome.storage.local.get(["aco_current_recreate_index"], resolve));
+  const startIdx = rebuildData.aco_current_recreate_index || 0;
+
+  for (let idx = startIdx; idx < optList.length; idx++) {
+    const item = optList[idx];
+    const progress = Math.round((idx / optList.length) * 100);
+    overlay.showWorking(
+      `Aktualizacja koszyka (${idx + 1}/${optList.length})`,
+      progress,
+      `Dodawanie ${idx + 1} z ${optList.length}`,
+      `Oferta ID: ${item.offer_id} (${item.quantity} szt.)`
+    );
+
+    try {
+      // Oznacz w storage jaki index aktualnie dodajemy, aby content script w iframe wiedział co robić
+      await new Promise(resolve => chrome.storage.local.set({ aco_current_recreate_index: idx }, resolve));
+      await addItemViaIframe(item, useShare);
+      await runDelay(1000, 300);
+    } catch (err) {
+      console.error(`[ACO] Błąd dodawania ${item.offer_id} przez iframe:`, err);
+      
+      if (document.hidden) {
+        console.warn("[ACO] Karta w tle. Ponawiamy próbę cichego dodawania...");
+        idx--; // retry same item
+        await runDelay(3000, 1000);
+        continue;
+      }
+      
+      console.warn(`[ACO] Nie udało się dodać ${item.offer_id}. Pomiń i skoryguj na końcu.`);
     }
-  } catch (e) {
-    // ignore
   }
 
-  // Set quantity if greater than 1
+  await new Promise(resolve => chrome.storage.local.set({ aco_current_recreate_index: optList.length }, resolve));
+  await verifyAndCorrectCart();
+}
+
+function addItemViaIframe(item, useShare) {
+  return new Promise((resolve, reject) => {
+    const url = buildOfferUrl(item.offer_id, useShare);
+    const iframe = iframeNav.createHiddenIframe(url);
+    
+    let resolved = false;
+    let timeoutTimer = null;
+    
+    const onMessage = (e) => {
+      if (!e.data || typeof e.data !== "object") return;
+      
+      if (e.data.type === "ACO_CAPTCHA_DETECTED") {
+        console.warn("[ACO] CAPTCHA detected in iframe!");
+        iframeNav.revealAsCaptchaModal();
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+          console.warn("[ACO] Rebuild timeout paused due to CAPTCHA.");
+        }
+      } else if (e.data.type === "ACO_CAPTCHA_SOLVED") {
+        console.log("[ACO] CAPTCHA solved in iframe!");
+        iframeNav.hideAgain();
+      } else if (e.data.type === "ACO_ITEM_ADDED") {
+        console.log("[ACO] Item added successfully via iframe!");
+        resolved = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        window.removeEventListener("message", onMessage);
+        iframeNav.destroy();
+        resolve();
+      } else if (e.data.type === "ACO_ADD_FAILED") {
+        console.error("[ACO] Failed to add item in iframe.");
+        resolved = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        window.removeEventListener("message", onMessage);
+        iframeNav.destroy();
+        reject(new Error("Add failed internally inside iframe"));
+      }
+    };
+    
+    window.addEventListener("message", onMessage);
+    
+    iframeNav.waitForLoad(20000).then(() => {
+      // Give the script inside some time to operate (only set timeout if not already paused/resolved)
+      if (!resolved && !timeoutTimer) {
+        const timeoutMs = document.hidden ? 60000 : 25000;
+        timeoutTimer = setTimeout(() => {
+          if (!resolved) {
+            window.removeEventListener("message", onMessage);
+            iframeNav.destroy();
+            reject(new Error("Timeout oczekiwania na dodanie w iframe"));
+          }
+        }, timeoutMs);
+      }
+    }).catch(err => {
+      if (!resolved) {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        window.removeEventListener("message", onMessage);
+        iframeNav.destroy();
+        reject(err);
+      }
+    });
+  });
+}
+
+// Stara logika używana jako fallback gdy iframe zablokowany
+async function runAddToCartFallback(item, index, totalItems, useShare = false) {
+  console.log(`[ACO] Recreating Fallback: Adding offer ${item.offer_id} (qty ${item.quantity})...`);
+
+  try {
+    const consent = document.querySelector("button[data-role='accept-consent']");
+    if (consent) { consent.click(); await runDelay(800, 100); }
+  } catch (e) {}
+
   if (item.quantity > 1) {
     try {
       const qtyInput = document.querySelector("input[type='number']");
@@ -1411,109 +1642,597 @@ async function runAddToCart(item, index, totalItems, useShare = false) {
         qtyInput.dispatchEvent(new Event("input", { bubbles: true }));
         await runDelay(1000, 100);
       }
-    } catch (err) {
-      console.warn("[ACO] Could not fill quantity input:", err.message);
-    }
+    } catch (err) {}
   }
 
-  // Click add-to-cart button
-  let addBtn = null;
-  const possibleSelectors = [
-    "button[id='add-to-cart-button']",
-    "button:has-text('dodaj do koszyka')",
-    "button:has-text('Dodaj do koszyka')"
-  ];
-
-  for (const sel of possibleSelectors) {
-    if (sel.includes("has-text")) {
-      const text = sel.match(/'(.*)'/)[1];
-      addBtn = [...document.querySelectorAll("button")].find(b => b.innerText && b.innerText.includes(text));
-    } else {
-      addBtn = document.querySelector(sel);
-    }
-    if (addBtn) break;
-  }
-
-  // Direct element check fallback
-  if (!addBtn) {
-    addBtn = [...document.querySelectorAll("button")].find(b => {
-      const txt = (b.innerText || "").toLowerCase();
-      return txt.includes("dodaj do koszyka") || txt.includes("dodaj do kosz");
-    });
-  }
+  let addBtn = document.querySelector("button[id='add-to-cart-button']") || 
+               [...document.querySelectorAll("button")].find(b => {
+                 const txt = (b.innerText || "").toLowerCase();
+                 return txt.includes("dodaj do koszyka") || txt.includes("dodaj do kosz");
+               });
 
   if (addBtn) {
     console.log("[ACO] Clicking 'Dodaj do koszyka' button.");
     addBtn.click();
-    await runDelay(3500, 1000); // Wait for modal/toast confirmations
+    await runDelay(3500, 1000); 
 
-    // Transition to next index
     const nextIdx = index + 1;
-    chrome.storage.local.set({
-      aco_current_recreate_index: nextIdx
-    }, async () => {
+    chrome.storage.local.set({ aco_current_recreate_index: nextIdx }, async () => {
       chrome.storage.local.get(["aco_optimized_list", "aco_use_share"], async (res) => {
         const list = res.aco_optimized_list || [];
         const shareFlag = res.aco_use_share === true;
         if (nextIdx < list.length) {
-          // Wait a random delay to look human-like
           await runDelay(1500, 200);
           window.location.href = buildOfferUrl(list[nextIdx].offer_id, shareFlag);
         } else {
-          // Koszyk przebudowany w całości – teraz nalicz statystyki
-          await runDelay(1200, 200);
-          chrome.storage.local.get(["aco_stats", "aco_pending_saved"], (statsRes) => {
-            const stats = statsRes.aco_stats || {
-              total_optimizations: 0,
-              total_saved: 0.0,
-              average_saved: 0.0,
-              max_single_saved: 0.0
-            };
-            const pendingSaved = statsRes.aco_pending_saved || 0;
-
-            if (pendingSaved > 0) {
-              stats.total_optimizations += 1;
-              stats.total_saved += pendingSaved;
-              stats.average_saved = stats.total_saved / stats.total_optimizations;
-              stats.max_single_saved = Math.max(stats.max_single_saved, pendingSaved);
-              console.log(`[ACO] Statystyki zaktualizowane po ukończeniu: zaoszczędzono ${pendingSaved.toFixed(2)} zł`);
-            }
-
-            chrome.storage.local.set({
-              aco_stats: stats,
-              aco_pending_saved: 0,
-              aco_state: "completed"
-            }, () => {
-              window.location.href = "https://allegro.pl/koszyk";
-            });
+          chrome.storage.local.set({
+            aco_state: "recreating_cart",
+            aco_current_recreate_index: list.length
+          }, () => {
+            window.location.href = "https://allegro.pl/koszyk";
           });
         }
       });
     });
   } else {
     console.error("[ACO] Add to cart button not found!");
-    overlay.showError(`Nie znaleziono przycisku 'Dodaj do koszyka' dla oferty: ${item.offer_id}. Prawdopodobnie wygasła lub zmienił się interfejs.`);
+    overlay.showError(`Nie znaleziono przycisku 'Dodaj do koszyka' dla oferty: ${item.offer_id}.`);
   }
+}
+
+function scrapeCurrentCartDomOnly() {
+  const items = {};
+  const removeButtons = document.querySelectorAll("button[data-cy='offer-row.remove'], button[aria-label^='Usuń przedmiot'], button[aria-label*='Usuń z koszyka']");
+  
+  removeButtons.forEach(btn => {
+    let row = btn.closest("section") || btn.closest("div[data-box-name='cart-item']") || btn.closest("li") || btn.parentElement;
+    while (row && row.tagName !== "BODY") {
+      if (row.querySelector("a[href*='/oferta/']")) {
+        break;
+      }
+      row = row.parentElement;
+    }
+    if (!row || row === document.body) return;
+    
+    const link = row.querySelector("a[href*='/oferta/']");
+    if (!link) return;
+    
+    const href = link.getAttribute("href") || "";
+    const match = href.match(/\/oferta\/.*?-?(\d{8,14})/);
+    if (!match) return;
+    const offerId = match[1];
+    
+    // Quantity input
+    let quantityInput = row.querySelector("input[aria-label='Quantity input field']") || row.querySelector("input[type='number']") || row.querySelector("input[type='text']");
+    let quantity = 1;
+    if (quantityInput) {
+      quantity = parseInt(quantityInput.value) || 1;
+    }
+    
+    items[offerId] = {
+      offer_id: offerId,
+      quantity: quantity,
+      quantityInput: quantityInput,
+      removeButton: btn,
+      rowElement: row
+    };
+  });
+  
+  return items;
+}
+
+async function verifyAndCorrectCart() {
+  if (!window.location.href.includes("/koszyk")) {
+    console.log("[ACO] Przekierowanie do koszyka w celu weryfikacji...");
+    window.location.href = "https://allegro.pl/koszyk";
+    return;
+  }
+
+  overlay.showWorking("Weryfikacja koszyka", 95, "Sprawdzanie spójności...", "Upewniamy się, że koszyk zawiera poprawne produkty i ilości.");
+
+  const data = await new Promise(resolve => chrome.storage.local.get(null, resolve));
+  const targetList = data.aco_optimized_list || [];
+  const useShare = data.aco_use_share === true;
+  const verifyRetries = data.aco_verify_retries || 0;
+
+  // 1. Scrape current cart items from the DOM
+  const currentItems = scrapeCurrentCartDomOnly();
+
+  // 2. Compare current items with target items
+  const missingItems = [];
+  const incorrectQtyItems = [];
+  const extraItems = [];
+
+  for (const target of targetList) {
+    const current = currentItems[target.offer_id];
+    if (!current) {
+      missingItems.push(target);
+    } else if (current.quantity !== target.quantity) {
+      incorrectQtyItems.push({ target, current });
+    }
+  }
+
+  for (const offerId in currentItems) {
+    const isTarget = targetList.some(t => t.offer_id === offerId);
+    if (!isTarget) {
+      extraItems.push(currentItems[offerId]);
+    }
+  }
+
+  // If everything matches perfectly, we are done!
+  if (missingItems.length === 0 && incorrectQtyItems.length === 0 && extraItems.length === 0) {
+    console.log("[ACO] Cart verification passed successfully!");
+    chrome.storage.local.set({ aco_verify_retries: 0 }, async () => {
+      await finalizeOptimization();
+    });
+    return;
+  }
+
+  console.log("[ACO] Wykryto niezgodności koszyka:", { missingItems, incorrectQtyItems, extraItems, verifyRetries });
+
+  if (verifyRetries >= 5) {
+    console.error("[ACO] Osiągnięto limit weryfikacji. Finalizowanie pomimo drobnych rozbieżności.");
+    chrome.storage.local.set({ aco_verify_retries: 0 }, async () => {
+      await finalizeOptimization();
+    });
+    return;
+  }
+
+  // Increment verify retries
+  await new Promise(resolve => chrome.storage.local.set({ aco_verify_retries: verifyRetries + 1 }, resolve));
+
+  // Perform corrections one by one to avoid race conditions
+  
+  // Correction A: Remove extra items
+  if (extraItems.length > 0) {
+    const itemToRemove = extraItems[0];
+    if (itemToRemove.removeButton) {
+      console.log(`[ACO Correction] Usuwanie nadmiarowego produktu: ${itemToRemove.offer_id}`);
+      overlay.showWorking("Korekta koszyka", 96, "Usuwanie nadmiarowego produktu...", `ID: ${itemToRemove.offer_id}`);
+      itemToRemove.removeButton.click();
+      await runDelay(2500, 500);
+      window.location.reload();
+    } else {
+      window.location.reload();
+    }
+    return;
+  }
+
+  // Correction B: Adjust incorrect quantities
+  if (incorrectQtyItems.length > 0) {
+    const { target, current } = incorrectQtyItems[0];
+    if (current.quantityInput) {
+      console.log(`[ACO Correction] Zmiana ilości dla ${target.offer_id}: ${current.quantity} -> ${target.quantity}`);
+      overlay.showWorking("Korekta koszyka", 97, "Dostosowywanie ilości...", `ID: ${target.offer_id} (${target.quantity} szt.)`);
+      
+      current.quantityInput.value = target.quantity;
+      current.quantityInput.dispatchEvent(new Event('input', { bubbles: true }));
+      current.quantityInput.dispatchEvent(new Event('change', { bubbles: true }));
+      current.quantityInput.blur();
+      
+      await runDelay(3000, 500);
+      window.location.reload();
+    } else {
+      window.location.reload();
+    }
+    return;
+  }
+
+  // Correction C: Add missing items
+  if (missingItems.length > 0) {
+    const itemToAdd = missingItems[0];
+    console.log(`[ACO Correction] Dodawanie brakującego produktu: ${itemToAdd.offer_id}`);
+    overlay.showWorking("Korekta koszyka", 98, "Dodawanie brakującego produktu...", `ID: ${itemToAdd.offer_id}`);
+    
+    try {
+      await new Promise(resolve => chrome.storage.local.set({ aco_correction_item: itemToAdd }, resolve));
+      await addItemViaIframe(itemToAdd, useShare);
+      await runDelay(1500, 300);
+    } catch (err) {
+      console.error("[ACO Correction] Błąd podczas dodawania brakującego produktu:", err);
+    } finally {
+      await new Promise(resolve => chrome.storage.local.remove(["aco_correction_item"], resolve));
+    }
+    
+    window.location.reload();
+    return;
+  }
+}
+
+async function finalizeOptimization() {
+  await runDelay(1200, 200);
+  chrome.storage.local.get(["aco_stats", "aco_pending_saved"], (statsRes) => {
+    const stats = statsRes.aco_stats || {
+      total_optimizations: 0,
+      total_saved: 0.0,
+      average_saved: 0.0,
+      max_single_saved: 0.0
+    };
+    const pendingSaved = statsRes.aco_pending_saved || 0;
+
+    if (pendingSaved > 0) {
+      stats.total_optimizations += 1;
+      stats.total_saved += pendingSaved;
+      stats.average_saved = stats.total_saved / stats.total_optimizations;
+      stats.max_single_saved = Math.max(stats.max_single_saved, pendingSaved);
+      console.log(`[ACO] Statystyki zaktualizowane po ukończeniu: zaoszczędzono ${pendingSaved.toFixed(2)} zł`);
+    }
+
+    chrome.storage.local.set({
+      aco_stats: stats,
+      aco_pending_saved: 0,
+      aco_state: "completed"
+    }, () => {
+      // W trybie cichej nawigacji musimy przeładować koszyk aby zobaczyć nowe produkty, 
+      // lub nawigować do koszyka jeśli jesteśmy w fallback mode (na innej podstronie).
+      window.location.href = "https://allegro.pl/koszyk";
+    });
+  });
 }
 
 // -------------------------------------------------------------
 // EVENT LISTENERS AND BOOTSTRAP
 // -------------------------------------------------------------
 
-// Listen to message from Popup to trigger cart scraping
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === "startOptimization") {
-    console.log("[ACO] startOptimization message received!");
-    sendResponse({ status: "started" });
-    chrome.storage.local.set({ aco_state: "scraping_cart" }, () => {
-      handleStateAction();
-    });
-  } else if (msg.action === "resetState") {
-    console.log("[ACO] resetState message received!");
-    sendResponse({ status: "reset" });
-    overlay.destroy();
-  }
-});
+if (window.top !== window.self) {
+  console.log("[ACO] Inicjalizacja skryptu wewnątrz iframe...");
+  checkIframeTasks();
+} else {
 
-// Run automatically on page load
-handleStateAction();
+
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === "startOptimization") {
+      console.log("[ACO] startOptimization message received!");
+      sendResponse({ status: "started" });
+      chrome.storage.local.set({ aco_state: "scraping_cart" }, () => {
+        handleStateAction();
+      });
+    } else if (msg.action === "resetState") {
+      console.log("[ACO] resetState message received!");
+      sendResponse({ status: "reset" });
+      overlay.destroy();
+    }
+  });
+
+  // Run automatically on page load
+  handleStateAction();
+}
+
+// Wait for product ID to be extracted from DOM scripts (polling to prevent hydration race conditions)
+function waitForProductId(offerId, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      let productId = null;
+
+      // 1. Check data-serialize-box-id scripts
+      document.querySelectorAll("script[data-serialize-box-id]").forEach(s => {
+        try {
+          const data = JSON.parse(s.textContent);
+          if (data && data.otherProductOffers && data.otherProductOffers.productId) {
+            productId = data.otherProductOffers.productId;
+          }
+        } catch (e) {}
+      });
+
+      // 2. Check canonical link
+      if (!productId) {
+        const canonical = document.querySelector("link[rel='canonical']");
+        if (canonical && canonical.href) {
+          const match = canonical.href.match(/-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+          if (match) productId = match[1];
+        }
+      }
+
+      if (productId) {
+        clearInterval(interval);
+        resolve(productId);
+      } else if (Date.now() - startTime > timeoutMs) {
+        clearInterval(interval);
+        resolve(null);
+      }
+    }, 200);
+  });
+}
+
+// Centralized helper to detect CAPTCHA or Cloudflare security challenges
+function isCaptchaOrChallengePage() {
+  const title = (document.title || "").toLowerCase();
+  const url = window.location.href;
+  
+  if (url.includes("captcha") || url.includes("challenge")) {
+    return true;
+  }
+  if (title.includes("captcha") || title.includes("just a moment") || title.includes("attention required") || title.includes("cloudflare")) {
+    return true;
+  }
+  if (document.querySelector(".cf-challenge, #challenge-form, [data-captcha], #cf-wrapper, #turnstile-wrapper")) {
+    return true;
+  }
+  return false;
+}
+
+async function checkIframeTasks() {
+  const url = window.location.href;
+
+  // CAPTCHA / challenge detection
+  if (isCaptchaOrChallengePage()) {
+    window.parent.postMessage({ type: "ACO_CAPTCHA_DETECTED" }, "*");
+    return;
+  }
+
+  if (!url.includes("/oferta/") && !url.includes("/oferty-produktu/")) return;
+
+  chrome.storage.local.get(["aco_state", "aco_cart_items", "aco_current_item_index",
+                              "aco_optimized_list", "aco_current_recreate_index"], async (res) => {
+
+    // ---- MODE 1: SCRAPING ALTERNATIVES ----
+    if (res.aco_state === "scraping_alternatives") {
+      const cart = res.aco_cart_items || [];
+      const idx = res.aco_current_item_index || 0;
+      const item = cart[idx];
+
+      if (!item) {
+        window.parent.postMessage({ type: "ACO_SCRAPE_FAILED" }, "*");
+        return;
+      }
+
+      // Case A: We are on the offer page - extract Product ID and redirect to the comparison page
+      if (url.includes("/oferta/")) {
+        console.log(`[ACO iframe] Loaded offer page for ${item.offer_id}. Extracting product ID...`);
+        
+        if (isCaptchaOrChallengePage()) {
+          window.parent.postMessage({ type: "ACO_CAPTCHA_DETECTED" }, "*");
+          return;
+        }
+
+        const productId = await waitForProductId(item.offer_id, 4000);
+
+        if (isCaptchaOrChallengePage()) {
+          window.parent.postMessage({ type: "ACO_CAPTCHA_DETECTED" }, "*");
+          return;
+        }
+
+        if (productId) {
+          const compareUrl = `https://allegro.pl/oferty-produktu/produkt-${productId}?order=p&buyNew=1&offerTypeBuyNow=1`;
+          console.log(`[ACO iframe] Redirecting iframe to comparison page: ${compareUrl}`);
+          window.location.replace(compareUrl);
+          return;
+        } else {
+          console.warn(`[ACO iframe] No product ID found for ${item.offer_id}. Returning original offer.`);
+          const fallback = [{
+            product_id_group: item.offer_id,
+            base_offer_id: item.offer_id,
+            offer_id: item.offer_id,
+            seller: item.seller || "Nieznany",
+            price: item.price || 9999.0,
+            is_smart: item.is_smart || false,
+            shipping_cost: item.shipping_cost || DEFAULT_SHIPPING_COST,
+            stock: 999,
+            required_quantity: item.quantity
+          }];
+          window.parent.postMessage({ type: "ACO_ALTERNATIVES_SCRAPED", offers: fallback }, "*");
+          return;
+        }
+      }
+
+      // Case B: We are on the comparison page - perform scrolling and scrape alternative offers
+      if (url.includes("/oferty-produktu/")) {
+        console.log("[ACO iframe] Loaded comparison page. Starting lazy scroll...");
+        
+        await runDelay(1000, 200);
+
+        // Try to accept GDPR consent modal if present
+        try {
+          const consent = document.querySelector("button[data-role='accept-consent']");
+          if (consent) {
+            console.log("[ACO iframe] Found consent button on comparison page. Clicking it...");
+            consent.click();
+            await runDelay(1200, 200);
+          }
+        } catch (e) {}
+
+        // Scroll down dynamically to load all lazy content
+        const scrollTimer = setInterval(() => {
+          try {
+            const height = Math.max(
+              document.body.scrollHeight,
+              document.documentElement.scrollHeight,
+              3000
+            );
+            window.scrollTo(0, height);
+          } catch (e) {}
+        }, 400);
+
+        await runDelay(3000, 500);
+        clearInterval(scrollTimer);
+        console.log("[ACO iframe] Scroll sequence finished. Parsing offers...");
+
+        // Check for CAPTCHA
+        if (isCaptchaOrChallengePage()) {
+          window.parent.postMessage({ type: "ACO_CAPTCHA_DETECTED" }, "*");
+          return;
+        }
+
+        let productIdGroup = item.offer_id;
+        const canonical = document.querySelector("link[rel='canonical']");
+        if (canonical && canonical.href) {
+          const match = canonical.href.match(/-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+          if (match) productIdGroup = match[1];
+        }
+
+        let offersList = [];
+
+        // Method 1: SSR/hydration JSON in <script data-serialize-box-id>
+        const scripts = document.querySelectorAll("script[data-serialize-box-id]");
+        scripts.forEach(s => {
+          try {
+            const data = JSON.parse(s.textContent);
+            if (data && data.__listing_StoreState) {
+              const elements = data.__listing_StoreState.items?.elements || [];
+              elements.forEach(el => {
+                const offerIdVal = el.id;
+                if (!offerIdVal || !/^\d+$/.test(String(offerIdVal))) return;
+
+                const sellerName = normalizeSeller(el.seller?.login || "Nieznany");
+                let priceVal = 9999.0;
+                if (el.price?.mainPrice?.amount) priceVal = parseFloat(el.price.mainPrice.amount);
+
+                let smart = false;
+                const labels = el.freebox?.labels || [];
+                labels.forEach(lbl => {
+                  (lbl.labelParts || []).forEach(p => {
+                    if (p.text && p.text.toLowerCase().includes("smart")) smart = true;
+                  });
+                });
+                if (!smart) {
+                  const str = JSON.stringify(el);
+                  if (str.includes('"Smart!"') || str.includes('is_smart":true')) smart = true;
+                }
+
+                let shippingCost = DEFAULT_SHIPPING_COST;
+                if (el.shipping?.lowest?.amount) shippingCost = parseFloat(el.shipping.lowest.amount);
+
+                offersList.push({
+                  product_id_group: productIdGroup,
+                  base_offer_id: item.offer_id,
+                  offer_id: String(offerIdVal),
+                  seller: sellerName,
+                  price: priceVal,
+                  is_smart: smart,
+                  shipping_cost: shippingCost,
+                  stock: el.quantity || 999,
+                  required_quantity: item.quantity
+                });
+              });
+            }
+          } catch (e) {}
+        });
+
+        // Method 2: DOM fallback
+        if (offersList.length === 0) {
+          const liItems = document.querySelectorAll(".opbox-listing li, li[data-role='offer-card'], [data-box-name='listing'] li");
+          liItems.forEach(li => {
+            try {
+              const aTag = li.querySelector("a[href*='/oferta/']");
+              if (!aTag) return;
+              const href = aTag.getAttribute("href") || "";
+              const match = href.match(/\/oferta\/.*?-?(\d{8,14})/);
+              if (!match) return;
+              const offerIdVal = match[1];
+
+              const sellerTag = li.querySelector("a[href*='/uzytkownik/'], a[href*='/sklep/']");
+              const sellerName = sellerTag ? normalizeSeller(sellerTag.getAttribute("href") || sellerTag.innerText) : "nieznany";
+
+              let priceVal = 9999.0;
+              const text = li.innerText || "";
+              const priceMatch = text.match(/([\d\s]+[.,]\d{2})\s*zł/);
+              if (priceMatch) priceVal = parseFloat(priceMatch[1].replace(/\s/g, "").replace(",", ".")) || 9999.0;
+
+              const isSmart = !!li.querySelector("button[aria-label*='Smart!'], [aria-label*='Smart'], img[src*='smart']") || text.toLowerCase().includes("smart");
+
+              let shippingCost = DEFAULT_SHIPPING_COST;
+              const shipMatch = text.match(/dostawa\s+od\s+([\d\s]+[.,]\d{2})\s*zł/i) || text.match(/dostawa\s+([\d\s]+[.,]\d{2})\s*zł/i);
+              if (shipMatch) shippingCost = parseFloat(shipMatch[1].replace(/\s/g, "").replace(",", ".")) || DEFAULT_SHIPPING_COST;
+
+              let stock = 999;
+              const tl = text.toLowerCase();
+              if (tl.includes("ostatnia sztuka")) stock = 1;
+              else if (tl.includes("ostatnie 2 sztuki")) stock = 2;
+
+              offersList.push({ product_id_group: productIdGroup, base_offer_id: item.offer_id, offer_id: offerIdVal, seller: sellerName, price: priceVal, is_smart: isSmart, shipping_cost: shippingCost, stock, required_quantity: item.quantity });
+            } catch (err) {}
+          });
+        }
+
+        // Always include the original offer
+        if (!offersList.some(o => o.offer_id === item.offer_id)) {
+          offersList.push({
+            product_id_group: productIdGroup,
+            base_offer_id: item.offer_id,
+            offer_id: item.offer_id,
+            seller: item.seller || "Nieznany",
+            price: item.price || 9999.0,
+            is_smart: item.is_smart || false,
+            shipping_cost: item.shipping_cost || DEFAULT_SHIPPING_COST,
+            stock: 999,
+            required_quantity: item.quantity
+          });
+        }
+
+        console.log(`[ACO iframe] Scraped ${offersList.length} alternatives for ${item.offer_id}`);
+        
+        if (offersList.length <= 1) {
+          chrome.storage.local.get(["aco_current_item_retry"], (resVal) => {
+            const retries = resVal.aco_current_item_retry || 0;
+            if (retries < 2) {
+              console.log(`[ACO iframe] Scraped 0 alternatives on comparison page. Retrying reload (${retries + 1}/2)...`);
+              chrome.storage.local.set({ aco_current_item_retry: retries + 1 }, () => {
+                window.location.reload();
+              });
+            } else {
+              console.log("[ACO iframe] Max retries reached on comparison page. Returning fallback.");
+              chrome.storage.local.set({ aco_current_item_retry: 0 }, () => {
+                window.parent.postMessage({ type: "ACO_ALTERNATIVES_SCRAPED", offers: offersList }, "*");
+              });
+            }
+          });
+        } else {
+          chrome.storage.local.set({ aco_current_item_retry: 0 }, () => {
+            window.parent.postMessage({ type: "ACO_ALTERNATIVES_SCRAPED", offers: offersList }, "*");
+          });
+        }
+        return;
+      }
+    }
+
+    // ---- MODE 2: RECREATING CART ----
+    if (res.aco_state === "recreating_cart") {
+      let item = res.aco_correction_item;
+      if (!item) {
+        const list = res.aco_optimized_list || [];
+        const idx = res.aco_current_recreate_index || 0;
+        item = list[idx];
+      }
+
+      if (!item || !url.includes(item.offer_id)) {
+        window.parent.postMessage({ type: "ACO_ADD_FAILED" }, "*");
+        return;
+      }
+
+      await runDelay(1000, 200);
+
+      try {
+        const consent = document.querySelector("button[data-role='accept-consent']");
+        if (consent) { consent.click(); await runDelay(500, 100); }
+      } catch (e) {}
+
+      if (item.quantity > 1) {
+        try {
+          const qtyInput = document.querySelector("input[type='number']");
+          if (qtyInput) {
+            qtyInput.value = item.quantity;
+            qtyInput.dispatchEvent(new Event("change", { bubbles: true }));
+            qtyInput.dispatchEvent(new Event("input", { bubbles: true }));
+            await runDelay(1000, 100);
+          }
+        } catch (err) {}
+      }
+
+      const addBtn = document.querySelector("button[id='add-to-cart-button']") ||
+                     [...document.querySelectorAll("button")].find(b => {
+                       const txt = (b.innerText || "").toLowerCase();
+                       return txt.includes("dodaj do koszyka") || txt.includes("dodaj do kosz");
+                     });
+
+      if (addBtn) {
+        addBtn.click();
+        await runDelay(3000, 500);
+        window.parent.postMessage({ type: "ACO_ITEM_ADDED" }, "*");
+      } else {
+        window.parent.postMessage({ type: "ACO_ADD_FAILED" }, "*");
+      }
+    }
+  });
+}
