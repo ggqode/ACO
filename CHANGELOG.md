@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-07-16
+### Changed
+- **Affiliate Disclosure**: Updated the UI in the popup and cart acceptance overlay to explicitly state that the "Z poleceniem" option uses the Allegro Share affiliate program, in compliance with Chrome Web Store guidelines.
+
+### Fixed
+- **Iframe Cart Rebuilding**: Fixed an issue in Chrome where the background cart rebuilding stalled. Added `all_frames: true` to the manifest to ensure the content script is correctly injected into the hidden iframe.
+
+---
+
 ## [1.2] - 2026-07-15
 ### Added
 - **Silent Mode Rebuilding**: Cart reconstruction is now done silently in the background via a hidden iframe, making the user's viewport reload-free during item addition.

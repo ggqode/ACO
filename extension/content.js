@@ -687,6 +687,7 @@ class ACOOverlay {
         ${isPreview ? `
         <div class="aco-share-section">
           <div class="aco-share-title">📦 Akceptuj koszyk</div>
+          <div style="font-size: 10px; text-align: center; color: #a0a0a0; margin: 4px 0;">Opcja "Z poleceniem" korzysta z programu afiliacyjnego Allegro Share.</div>
           <div id="aco-cashback-notice" class="aco-cashback-notice"></div>
           <div class="aco-share-buttons">
             <button id="aco-apply-with-share" class="aco-close-btn aco-btn-share-yes" title="Zastosuj koszyk – oferty otwarte przez link z poleceniem autora">

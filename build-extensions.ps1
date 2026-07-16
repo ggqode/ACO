@@ -1,11 +1,13 @@
 # build-extensions.ps1
 # Automates building the extension packages for both Chromium and Firefox.
 
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
 # 1. Package Chromium extension (Chrome / Edge / Brave / Opera)
 Write-Host "Packaging for Chromium (Chrome/Edge/Brave)..." -ForegroundColor Green
-if (Test-Path "ACO-chromium.zip") { Remove-Item "ACO-chromium.zip" }
+if (Test-Path "ACO-chromium.zip") { Remove-Item "ACO-chromium.zip" -Force }
 # manifest.json is already configured for Chromium
-Compress-Archive -Path "extension/*" -DestinationPath "ACO-chromium.zip" -Force
+python build_zip.py extension ACO-chromium.zip
 
 # 2. Package Firefox extension
 Write-Host "Packaging for Firefox..." -ForegroundColor Green
@@ -20,12 +22,12 @@ try {
         try {
             Remove-Item "ACO-firefox.zip" -Force -ErrorAction Stop
         } catch {
-            Write-Warning "Plik ACO-firefox.zip jest zablokowany przez inny proces. Pomijam usuwanie i sprobuje nadpisac."
+            Write-Warning "Plik ACO-firefox.zip jest zablokowany przez inny proces. Spowoduje to blad pakowania."
         }
     }
     
     # Package Firefox files
-    Compress-Archive -Path "extension/*" -DestinationPath "ACO-firefox.zip" -Force
+    python build_zip.py extension ACO-firefox.zip
 } catch {
     Write-Error "Blad podczas budowania Firefox zip: $_"
 } finally {
