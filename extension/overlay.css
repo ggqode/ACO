@@ -190,6 +190,13 @@
   padding-bottom: 8px;
 }
 
+.aco-summary-table th:nth-child(2),
+.aco-summary-table th:nth-child(3),
+.aco-summary-table th:nth-child(4) {
+  text-align: right;
+  padding-left: 8px;
+}
+
 .aco-summary-table td {
   padding: 8px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
@@ -200,8 +207,10 @@
 }
 
 .aco-summary-table td:nth-child(2),
-.aco-summary-table td:nth-child(3) {
+.aco-summary-table td:nth-child(3),
+.aco-summary-table td:nth-child(4) {
   text-align: right;
+  padding-left: 12px;
 }
 
 .aco-summary-table td:nth-child(2) {
@@ -210,6 +219,11 @@
 
 .aco-summary-table td:nth-child(3) {
   color: #aaffaa;
+  font-weight: 600;
+}
+
+.aco-summary-table td:nth-child(4) {
+  color: #ffffff;
   font-weight: 600;
 }
 

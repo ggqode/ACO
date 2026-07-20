@@ -556,7 +556,7 @@ class ACOOverlay {
     this.setupLogsToggle();
   }
 
-  showSummary(results, initial, optimizedList, stats, initialList = [], isPreview = false) {
+  showSummary(results, initial, optimizedList, stats, initialList = [], isPreview = false, finalTotals = null) {
     this.init();
 
     // Defensive price formatting helper
@@ -576,7 +576,9 @@ class ACOOverlay {
     const totalCostBefore = initial.total_cost || 0;
     const totalCostAfter = results.totalCost || 0;
 
-    const savedAmount = Math.max(0, totalCostBefore - totalCostAfter);
+    const savedAmount = isPreview 
+      ? Math.max(0, totalCostBefore - totalCostAfter)
+      : (finalTotals ? Math.max(0, totalCostBefore - finalTotals.total_cost) : Math.max(0, totalCostBefore - totalCostAfter));
 
     // Calculate initial sellers and shipments count from initialList
     const initialSellers = new Set(initialList.map(o => o.seller || "Nieznany"));
@@ -629,7 +631,8 @@ class ACOOverlay {
             <tr>
               <th>Metryka</th>
               <th>Przed</th>
-              <th>Po</th>
+              <th>${isPreview ? "Przewidywane" : "Przewidywane"}</th>
+              ${!isPreview && finalTotals ? "<th>Finalnie</th>" : ""}
             </tr>
           </thead>
           <tbody>
@@ -637,26 +640,29 @@ class ACOOverlay {
               <td>Produkty</td>
               <td>${fmt(prodCostBefore)} zł</td>
               <td>${fmt(prodCostAfter)} zł</td>
+              ${!isPreview && finalTotals ? `<td>${fmt(finalTotals.products_cost)} zł</td>` : ""}
             </tr>
             <tr>
               <td>Dostawa</td>
               <td>${fmt(shipCostBefore)} zł</td>
               <td>${fmt(shipCostAfter)} zł</td>
+              ${!isPreview && finalTotals ? `<td>${fmt(finalTotals.shipping_cost)} zł</td>` : ""}
             </tr>
             <tr>
               <td>Suma razem</td>
               <td><strong>${fmt(totalCostBefore)} zł</strong></td>
               <td><strong>${fmt(totalCostAfter)} zł</strong></td>
+              ${!isPreview && finalTotals ? `<td><strong>${fmt(finalTotals.total_cost)} zł</strong></td>` : ""}
             </tr>
             <tr>
               <td>Sprzedawcy</td>
               <td>${sellersBefore}</td>
-              <td>${sellersAfter}</td>
+              <td ${!isPreview && finalTotals ? 'colspan="2"' : ''}>${sellersAfter}</td>
             </tr>
             <tr>
               <td>Płatne przesyłki</td>
               <td>${shipmentsBefore}</td>
-              <td>${shipmentsAfter}</td>
+              <td ${!isPreview && finalTotals ? 'colspan="2"' : ''}>${shipmentsAfter}</td>
             </tr>
           </tbody>
         </table>
@@ -819,6 +825,55 @@ class ACOOverlay {
       });
     });
   }
+
+  showInfo(title, subtitle, message) {
+    this.init();
+    setHTML(this.container, `
+      <div class="aco-overlay-header">
+        <img src="${chrome.runtime.getURL("icons/logo.png")}" alt="ACO Logo" class="aco-overlay-logo">
+        <div class="aco-overlay-header-text">
+          <h3>${title}</h3>
+          <span>${subtitle}</span>
+        </div>
+      </div>
+      <div class="aco-overlay-content">
+        <div style="font-size:14px; color:#4CAF50; line-height:1.5; padding:15px; background:rgba(76, 175, 80, 0.1); border-radius:8px; border: 1px solid #4CAF50;">
+          ${message}
+        </div>
+        <button id="aco-info-close" class="aco-close-btn" style="margin-top: 15px;">Zamknij</button>
+      </div>
+    `);
+    document.getElementById("aco-info-close").addEventListener("click", () => {
+      chrome.storage.local.set({ aco_state: "idle" }, () => {
+        this.destroy();
+      });
+    });
+  }
+}
+
+// -------------------------------------------------------------
+// REACT INPUT SETTER (HACK)
+// -------------------------------------------------------------
+// Bypass React's controlled input to forcefully set a value
+function setReactInputValue(input, value) {
+  const strValue = String(value);
+  
+  // Native setter bypass
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+  if (nativeInputValueSetter) {
+    nativeInputValueSetter.call(input, strValue);
+  } else {
+    input.value = strValue;
+  }
+  
+  // React 16+ tracker bypass
+  const tracker = input._valueTracker;
+  if (tracker) {
+    tracker.setValue('');
+  }
+  
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 const overlay = new ACOOverlay();
@@ -948,6 +1003,7 @@ async function runStateAction(data) {
   else if (state === "completed") {
     const results = data.aco_optimized_results;
     const initial = data.aco_initial_totals;
+    const finalTotals = data.aco_final_totals;
     const optList = data.aco_optimized_list || [];
     const stats = data.aco_stats || {
       total_optimizations: 0,
@@ -957,7 +1013,7 @@ async function runStateAction(data) {
     };
 
     if (results && initial) {
-      overlay.showSummary(results, initial, optList, stats, data.aco_cart_items || []);
+      overlay.showSummary(results, initial, optList, stats, data.aco_cart_items || [], false, finalTotals);
     } else {
       overlay.showError("Brak danych podsumowania w pamięci lokalnej.");
     }
@@ -967,6 +1023,7 @@ async function runStateAction(data) {
 // -------------------------------------------------------------
 // STEP 1: SCRAPE CART ITEMS
 // -------------------------------------------------------------
+
 async function runScrapeCart() {
   console.log("[ACO] Scraping cart elements...");
   try {
@@ -986,7 +1043,6 @@ async function runScrapeCart() {
   const removeButtons = document.querySelectorAll("button[data-cy='offer-row.remove'], button[aria-label^='Usuń przedmiot'], button[aria-label*='Usuń z koszyka']");
 
   removeButtons.forEach(btn => {
-    // Find the row container by ascending
     let row = btn.closest("section") || btn.closest("div[data-box-name='cart-item']") || btn.closest("li") || btn.parentElement;
     while (row && row.tagName !== "BODY") {
       if (row.querySelector("a[href*='/oferta/']")) {
@@ -1353,6 +1409,25 @@ function extractInitialTotals() {
   return totals;
 }
 
+async function waitForCartTotalChange(oldTotal, timeoutMs = 10000) {
+  console.log(`[ACO] Czekam na zmianę całkowitego kosztu (obecnie: ${oldTotal})...`);
+  return new Promise(resolve => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      const currentTotals = extractInitialTotals();
+      if (Math.abs(currentTotals.total_cost - oldTotal) > 0.01) {
+        clearInterval(interval);
+        console.log(`[ACO] Całkowity koszt zmienił się: ${oldTotal} -> ${currentTotals.total_cost}`);
+        resolve(true);
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(interval);
+        console.warn(`[ACO] Timeout oczekiwania na zmianę całkowitego kosztu koszyka.`);
+        resolve(false);
+      }
+    }, 300);
+  });
+}
+
 // -------------------------------------------------------------
 // STEP 3: RUN THE SOLVER
 // -------------------------------------------------------------
@@ -1381,6 +1456,45 @@ async function runOptimization(data) {
     } else {
       overlay.showError("Solver nie był w stanie znaleźć optymalnego koszyka.");
     }
+    return;
+  }
+
+  // Sprawdzanie czy optymalizacja przyniesie zysk
+  const initialList = data.aco_cart_items || [];
+  let initialProductCost = 0;
+  const initialSellersMap = {};
+  initialList.forEach(item => {
+    initialProductCost += item.price * item.quantity;
+    const s = item.seller || "Nieznany";
+    if (!initialSellersMap[s]) {
+      initialSellersMap[s] = { shipping_cost: item.shipping_cost || 0.0 };
+    } else {
+      initialSellersMap[s].shipping_cost = Math.max(initialSellersMap[s].shipping_cost, item.shipping_cost || 0.0);
+    }
+  });
+
+  const shipmentsBefore = Object.values(initialSellersMap).filter(s => s.shipping_cost > 0).length;
+
+  const sellerStates = result.sellerStates || {};
+  const shipmentsAfter = Object.keys(sellerStates).filter(s => {
+    const state = sellerStates[s];
+    return state.qtyBought > 0 && (state.shippingPaid > 0 || (typeof state.shippingPaid === 'undefined' && state.totalSmartCost < 45.0));
+  }).length;
+
+  const isSameTotalCost = Math.abs(result.totalCost - initialTotals.total_cost) <= 0.01;
+  let shouldOptimize = false;
+
+  if (result.totalCost < initialTotals.total_cost - 0.01) {
+    shouldOptimize = true;
+  } else if (isSameTotalCost && shipmentsAfter < shipmentsBefore) {
+    shouldOptimize = true;
+  }
+
+  if (!shouldOptimize) {
+    console.log("[ACO] Brak sensu optymalizacji. Wynik:", { productCost: result.productCost, initialProductCost, shipmentsAfter, shipmentsBefore, totalCost: result.totalCost, initialTotal: initialTotals.total_cost });
+    chrome.storage.local.set({ aco_state: "idle" }, () => {
+      overlay.showInfo("Koszyk jest optymalny", "Brak lepszych kombinacji", "Aktualna zawartość koszyka to najlepsza możliwa opcja pod kątem produktów i ilości płatnych przesyłek. Optymalizacja nie przyniosłaby oszczędności.");
+    });
     return;
   }
 
@@ -1499,14 +1613,17 @@ function checkCartIsEmptyAndProceed() {
   const deleteBtns = document.querySelectorAll("button[data-cy='offer-row.remove'], button[aria-label^='Usuń przedmiot']");
 
   if (deleteBtns.length === 0) {
-    console.log("[ACO] Cart is completely empty. Starting recreation.");
-    chrome.storage.local.get(["aco_optimized_list", "aco_use_share"], (res) => {
+    console.log("[ACO] Cart is completely empty. Proceeding to next state.");
+    chrome.storage.local.get(["aco_optimized_list", "aco_use_share", "aco_next_state_after_clear"], (res) => {
       const optList = res.aco_optimized_list || [];
       const useShare = res.aco_use_share === true;
-      if (optList.length > 0) {
+      const nextState = res.aco_next_state_after_clear || "recreating_cart";
+      
+      if (nextState === "optimizing" || optList.length > 0) {
         chrome.storage.local.set({
           aco_current_recreate_index: 0,
-          aco_state: "recreating_cart"
+          aco_state: nextState,
+          aco_next_state_after_clear: null
         }, () => {
           handleStateAction();
         });
@@ -1638,9 +1755,7 @@ async function runAddToCartFallback(item, index, totalItems, useShare = false) {
     try {
       const qtyInput = document.querySelector("input[type='number']");
       if (qtyInput) {
-        qtyInput.value = item.quantity;
-        qtyInput.dispatchEvent(new Event("change", { bubbles: true }));
-        qtyInput.dispatchEvent(new Event("input", { bubbles: true }));
+        setReactInputValue(qtyInput, item.quantity);
         await runDelay(1000, 100);
       }
     } catch (err) {}
@@ -1802,16 +1917,49 @@ async function verifyAndCorrectCart() {
   // Correction B: Adjust incorrect quantities
   if (incorrectQtyItems.length > 0) {
     const { target, current } = incorrectQtyItems[0];
+    
+    // Check if we already tried to correct this item
+    const failedMap = data.aco_failed_qty_corrections || {};
+    
+    if (target.quantity > current.quantity && failedMap[target.offer_id] >= 1) {
+      // We tried to increase it, but Allegro blocked it. Max stock reached!
+      console.warn(`[ACO] Wykryto twardy limit magazynowy dla ${target.offer_id}. Maksymalnie: ${current.quantity} szt.`);
+      
+      const allOffers = data.aco_all_offers || [];
+      const offerIndex = allOffers.findIndex(o => o.offer_id === target.offer_id);
+      if (offerIndex !== -1) {
+        allOffers[offerIndex].stock = current.quantity;
+        
+        await new Promise(resolve => chrome.storage.local.set({
+          aco_all_offers: allOffers,
+          aco_failed_qty_corrections: {},
+          aco_verify_retries: 0,
+          aco_next_state_after_clear: "optimizing",
+          aco_state: "clearing_cart"
+        }, resolve));
+        
+        overlay.showWorking("Wykryto brak towaru", 0, "Obliczanie koszyka na nowo...", `Ograniczenie do ${current.quantity} szt. dla ${target.offer_id}`);
+        await runDelay(1500, 500);
+        handleStateAction();
+        return;
+      }
+    }
+    
+    // Register correction attempt
+    failedMap[target.offer_id] = (failedMap[target.offer_id] || 0) + 1;
+    await new Promise(resolve => chrome.storage.local.set({ aco_failed_qty_corrections: failedMap }, resolve));
+
     if (current.quantityInput) {
       console.log(`[ACO Correction] Zmiana ilości dla ${target.offer_id}: ${current.quantity} -> ${target.quantity}`);
       overlay.showWorking("Korekta koszyka", 97, "Dostosowywanie ilości...", `ID: ${target.offer_id} (${target.quantity} szt.)`);
       
-      current.quantityInput.value = target.quantity;
-      current.quantityInput.dispatchEvent(new Event('input', { bubbles: true }));
-      current.quantityInput.dispatchEvent(new Event('change', { bubbles: true }));
+      const preTotals = extractInitialTotals();
+      setReactInputValue(current.quantityInput, target.quantity);
       current.quantityInput.blur();
       
-      await runDelay(3000, 500);
+      await waitForCartTotalChange(preTotals.total_cost, 10000);
+      await runDelay(500, 200);
+      
       window.location.reload();
     } else {
       window.location.reload();
@@ -1842,27 +1990,39 @@ async function verifyAndCorrectCart() {
 
 async function finalizeOptimization() {
   await runDelay(1200, 200);
-  chrome.storage.local.get(["aco_stats", "aco_pending_saved"], (statsRes) => {
-    const stats = statsRes.aco_stats || {
+  chrome.storage.local.get(["aco_stats", "aco_initial_totals"], (res) => {
+    const stats = res.aco_stats || {
       total_optimizations: 0,
       total_saved: 0.0,
       average_saved: 0.0,
       max_single_saved: 0.0
     };
-    const pendingSaved = statsRes.aco_pending_saved || 0;
+    const initialTotals = res.aco_initial_totals;
 
-    if (pendingSaved > 0) {
+    // Scrape final totals from the DOM
+    const finalTotals = extractInitialTotals();
+    
+    // Oblicz faktyczne oszczędności na podstawie rzeczywistych cen z koszyka
+    let savedTotal = 0;
+    if (initialTotals && finalTotals) {
+      savedTotal = initialTotals.total_cost - finalTotals.total_cost;
+    }
+
+    if (savedTotal > 0.01) {
       stats.total_optimizations += 1;
-      stats.total_saved += pendingSaved;
+      stats.total_saved += savedTotal;
       stats.average_saved = stats.total_saved / stats.total_optimizations;
-      stats.max_single_saved = Math.max(stats.max_single_saved, pendingSaved);
-      console.log(`[ACO] Statystyki zaktualizowane po ukończeniu: zaoszczędzono ${pendingSaved.toFixed(2)} zł`);
+      stats.max_single_saved = Math.max(stats.max_single_saved, savedTotal);
+      console.log(`[ACO] Statystyki zaktualizowane po ukończeniu: zaoszczędzono ${savedTotal.toFixed(2)} zł`);
+    } else {
+      console.log(`[ACO] Brak faktycznych oszczędności na końcu procesu. Pomięcie aktualizacji statystyk. Zmiana: ${savedTotal.toFixed(2)} zł`);
     }
 
     chrome.storage.local.set({
       aco_stats: stats,
       aco_pending_saved: 0,
-      aco_state: "completed"
+      aco_state: "completed",
+      aco_final_totals: finalTotals
     }, () => {
       // W trybie cichej nawigacji musimy przeładować koszyk aby zobaczyć nowe produkty, 
       // lub nawigować do koszyka jeśli jesteśmy w fallback mode (na innej podstronie).
@@ -2213,9 +2373,7 @@ async function checkIframeTasks() {
         try {
           const qtyInput = document.querySelector("input[type='number']");
           if (qtyInput) {
-            qtyInput.value = item.quantity;
-            qtyInput.dispatchEvent(new Event("change", { bubbles: true }));
-            qtyInput.dispatchEvent(new Event("input", { bubbles: true }));
+            setReactInputValue(qtyInput, item.quantity);
             await runDelay(1000, 100);
           }
         } catch (err) {}

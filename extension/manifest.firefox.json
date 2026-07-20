@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ACO - Cart Optimizer",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "ACO - Cart Optimizer. Optymalizuje zakupy i koszty wysyłki w serwisie Allegro.",
   "icons": {
     "16": "icons/logo.png",

@@ -43,16 +43,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "optimizeCart") {
     console.log("[Background] Otrzymano zlecenie optymalizacji", message.offers.length, "ofert.");
 
-    // Firefox MV3 (background scripts) supports returning a Promise from
-    // onMessage to keep the channel open – this is more reliable than
-    // returning `true` + calling sendResponse asynchronously, which can
-    // silently fail in Firefox.
-    // Chrome (service worker) also handles a returned Promise correctly.
-    return runHighsOptimization(message.offers, message.initialTotals)
+    const promise = runHighsOptimization(message.offers, message.initialTotals)
       .catch(err => {
         console.error("[Background] Błąd optymalizacji:", err);
         return { error: err.message };
       });
+
+    if (typeof browser !== 'undefined') {
+      return promise; // Firefox MV3
+    } else {
+      promise.then(sendResponse);
+      return true; // Chrome MV3
+    }
   }
 });
 
@@ -97,6 +99,18 @@ async function runHighsOptimization(offers, initialTotals) {
       .filter(s => bestOffers[`${p}|||${s}`])
       .sort((a, b) => bestOffers[`${p}|||${a}`].price - bestOffers[`${p}|||${b}`].price)
       .slice(0, 15);
+      
+    // Zabezpieczenie przed brakiem dostępnych sztuk na całym rynku
+    let totalStockAvailable = 0;
+    for (const s of candidateSellers[p]) {
+      const o = bestOffers[`${p}|||${s}`];
+      totalStockAvailable += (o.stock || 999);
+    }
+    
+    if (totalStockAvailable < Q[p]) {
+      console.warn(`[Background] UWAGA: Dla produktu ${p} brak wymaganej ilości na rynku. Redukcja z ${Q[p]} na ${totalStockAvailable} szt.`);
+      Q[p] = totalStockAvailable;
+    }
   }
 
   const activeSellersSet = new Set();
@@ -129,7 +143,8 @@ async function runHighsOptimization(offers, initialTotals) {
     }
   }
   for (const s of activeSellers) {
-    objTerms.push(`${sellerShipping[s]} z_${sIdx[s]}`);
+    objTerms.push(`10.49 ship1_${sIdx[s]}`);
+    objTerms.push(`10.49 ship2_${sIdx[s]}`);
   }
   lp += objTerms.join(" + ") + "\n";
 
@@ -143,22 +158,39 @@ async function runHighsOptimization(offers, initialTotals) {
   }
 
   for (const s of activeSellers) {
-    const termsBuy = [];
-    const termsSmart = [`45 y_${sIdx[s]}`, `- 45 z_${sIdx[s]}`];
+    const termsSmartEligible = [];
+    const termsW = [];
     
     for (const p of allProducts) {
       if (candidateSellers[p].includes(s)) {
-        termsBuy.push(`x_${pIdx[p]}_${sIdx[s]}`);
+        // x_sp <= M_total * u_sp
+        lp += `  x_u_${pIdx[p]}_${sIdx[s]}: x_${pIdx[p]}_${sIdx[s]} - ${M_total} u_${pIdx[p]}_${sIdx[s]} <= 0\n`;
+        
         const o = bestOffers[`${p}|||${s}`];
         if (o.is_smart) {
-          termsSmart.push(`- ${o.price} x_${pIdx[p]}_${sIdx[s]}`);
+          termsSmartEligible.push(`${o.price} x_${pIdx[p]}_${sIdx[s]}`);
+          // w_sp >= u_sp - smart_qualified_s => w_sp - u_sp + smart_qualified_s >= 0
+          lp += `  w_def_${pIdx[p]}_${sIdx[s]}: w_${pIdx[p]}_${sIdx[s]} - u_${pIdx[p]}_${sIdx[s]} + smart_qual_${sIdx[s]} >= 0\n`;
+        } else {
+          // w_sp >= u_sp => w_sp - u_sp >= 0
+          lp += `  w_def_${pIdx[p]}_${sIdx[s]}: w_${pIdx[p]}_${sIdx[s]} - u_${pIdx[p]}_${sIdx[s]} >= 0\n`;
         }
+        termsW.push(`w_${pIdx[p]}_${sIdx[s]}`);
       }
     }
     
-    if (termsBuy.length > 0) {
-      lp += `  buy_${sIdx[s]}: ${termsBuy.join(" + ")} - ${M_total} y_${sIdx[s]} <= 0\n`;
-      lp += `  smart_${sIdx[s]}: ${termsSmart.join(" ")} <= 0\n`;
+    // Smart qualification
+    if (termsSmartEligible.length > 0) {
+      // 45 * smart_qualified_s <= sum(price * x_sp)
+      lp += `  smart_cond_${sIdx[s]}: 45 smart_qual_${sIdx[s]} - ${termsSmartEligible.join(" - ")} <= 0\n`;
+    } else {
+      lp += `  smart_cond_${sIdx[s]}: smart_qual_${sIdx[s]} = 0\n`;
+    }
+    
+    // Shipping tiers
+    if (termsW.length > 0) {
+      lp += `  ship1_cond_${sIdx[s]}: ${termsW.join(" + ")} - ${allProducts.length} ship1_${sIdx[s]} <= 0\n`;
+      lp += `  ship2_cond_${sIdx[s]}: ${termsW.join(" + ")} - ${allProducts.length} ship2_${sIdx[s]} <= 1\n`;
     }
   }
 
@@ -168,22 +200,28 @@ async function runHighsOptimization(offers, initialTotals) {
       const o = bestOffers[`${p}|||${s}`];
       const stock = Math.min(o.stock || 999, Q[p]);
       lp += `  0 <= x_${pIdx[p]}_${sIdx[s]} <= ${stock}\n`;
+      lp += `  0 <= u_${pIdx[p]}_${sIdx[s]} <= 1\n`;
+      lp += `  0 <= w_${pIdx[p]}_${sIdx[s]} <= 1\n`;
     }
   }
   for (const s of activeSellers) {
-    lp += `  0 <= y_${sIdx[s]} <= 1\n`;
-    lp += `  0 <= z_${sIdx[s]} <= 1\n`;
+    lp += `  0 <= smart_qual_${sIdx[s]} <= 1\n`;
+    lp += `  0 <= ship1_${sIdx[s]} <= 1\n`;
+    lp += `  0 <= ship2_${sIdx[s]} <= 1\n`;
   }
 
   lp += `Generals\n`;
   for (const p of allProducts) {
     for (const s of candidateSellers[p]) {
       lp += `  x_${pIdx[p]}_${sIdx[s]}\n`;
+      lp += `  u_${pIdx[p]}_${sIdx[s]}\n`;
+      lp += `  w_${pIdx[p]}_${sIdx[s]}\n`;
     }
   }
   for (const s of activeSellers) {
-    lp += `  y_${sIdx[s]}\n`;
-    lp += `  z_${sIdx[s]}\n`;
+    lp += `  smart_qual_${sIdx[s]}\n`;
+    lp += `  ship1_${sIdx[s]}\n`;
+    lp += `  ship2_${sIdx[s]}\n`;
   }
 
   lp += `End\n`;
@@ -236,14 +274,57 @@ async function runHighsOptimization(offers, initialTotals) {
   let productCost = 0;
   let shippingCost = 0;
   for (const item of assignment) productCost += item.price * item.quantity;
+  
   for (const s in sellerStates) {
     const st = sellerStates[s];
-    st.shippingPaid = st.totalSmartCost >= 45.0 ? 0 : sellerShipping[s];
+    
+    let smartCost = 0;
+    let smartProducts = 0;
+    let nonSmartCount = 0;
+    
+    for (const item of assignment) {
+      if (item.seller === s) {
+        if (item.is_smart) {
+          smartCost += item.price * item.quantity;
+          smartProducts++;
+        } else {
+          nonSmartCount++;
+        }
+      }
+    }
+    
+    let paidProductsCount = 0;
+    if (smartCost < 45) {
+      paidProductsCount = smartProducts + nonSmartCount;
+    } else {
+      paidProductsCount = nonSmartCount;
+    }
+    
+    if (paidProductsCount === 0) {
+      st.shippingPaid = 0;
+    } else if (paidProductsCount === 1) {
+      st.shippingPaid = 10.49;
+    } else {
+      st.shippingPaid = 20.98;
+    }
+    
     shippingCost += st.shippingPaid;
   }
 
   const totalCost = productCost + shippingCost;
   console.log(`[Background] ✅ MILP: Produkty: ${productCost.toFixed(2)} zł | Dostawa: ${shippingCost.toFixed(2)} zł | RAZEM: ${totalCost.toFixed(2)} zł`);
 
-  return { assignment, productCost, shippingCost, totalCost, sellerStates };
+  const mergedAssignment = [];
+  const assignmentMap = {};
+
+  for (const item of assignment) {
+    if (assignmentMap[item.offer_id]) {
+      assignmentMap[item.offer_id].quantity += item.quantity;
+    } else {
+      assignmentMap[item.offer_id] = { ...item };
+      mergedAssignment.push(assignmentMap[item.offer_id]);
+    }
+  }
+
+  return { assignment: mergedAssignment, productCost, shippingCost, totalCost, sellerStates };
 }
