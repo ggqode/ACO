@@ -27,3 +27,4 @@ extension/config.production.js
 .agents/
 .gemini/
 .git/
+implementation_plan.md
